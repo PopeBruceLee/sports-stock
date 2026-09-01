@@ -19,13 +19,17 @@
      to manual entry if not configured. See "AI SETUP" at the bottom.
    • SharePoint sync posts to a Power Automate webhook (Admin → Backup).
    ============================================================ */
-import React from "react";
+
 import { useState, useEffect, useRef } from "react";
 
 /* ── CONFIG ────────────────────────────────────────────────── */
 const CLUB_DOMAIN = "cpfc.co.uk";     // required email domain
 const AI_ENDPOINT = "";               // e.g. "/api/ai" — leave "" to disable AI
 const STORE_KEY   = "sportsstock_v1";
+
+/* Text colours — darkened for pitch-side readability */
+const T_MUTED = "#4b5563";   // secondary text (was #6b7280)
+const T_FAINT = "#64748b";   // tertiary text (was #9ca3af)
 
 const TEAMS = ["Women's First Team", "Men's First Team", "Academy"];
 const ROLES = { super_admin: "Super Admin", doctor: "Doctor", physiotherapist: "Physiotherapist", sports_therapist: "Sports Therapist" };
@@ -111,16 +115,16 @@ const toDataURL = f => new Promise((ok, no) => {
 });
 
 /* ── STYLE PRIMITIVES ─────────────────────────────────────── */
-const IN = { width: "100%", padding: "13px 14px", border: "1px solid #e5e7eb", borderRadius: 11, fontSize: 16, boxSizing: "border-box", background: "#fff", fontFamily: "inherit", outline: "none" };
-const LB = { display: "block", fontSize: 15, fontWeight: 600, color: "#374151", marginBottom: 7 };
-const Card = ({ children, s = {} }) => <div style={{ background: "#fff", borderRadius: 15, padding: "18px 20px", border: "1px solid #eee", boxShadow: "0 1px 3px rgba(0,0,0,.05)", ...s }}>{children}</div>;
-const Tag = ({ t, bg = "#f3f4f6", fg = "#374151" }) => <span style={{ fontSize: 13, fontWeight: 600, background: bg, color: fg, padding: "4px 10px", borderRadius: 99, display: "inline-block" }}>{t}</span>;
-const Empty = ({ t }) => <div style={{ textAlign: "center", padding: "40px 0", color: "#9ca3af", fontSize: 16 }}>{t}</div>;
-const Dot = ({ n }) => n > 0 ? <span style={{ background: "#ef4444", color: "#fff", borderRadius: 99, fontSize: 12, fontWeight: 700, padding: "2px 7px", marginLeft: 5 }}>{n}</span> : null;
-const Btn = ({ t, on, bg = "#1e3a8a", fg = "#fff", full, sm, dis }) => <button onClick={dis ? undefined : on} style={{ padding: sm ? "10px 16px" : "14px 20px", background: bg, color: fg, border: "none", borderRadius: 11, fontSize: sm ? 15 : 17, fontWeight: 600, cursor: dis ? "default" : "pointer", opacity: dis ? .4 : 1, width: full ? "100%" : undefined, minHeight: sm ? 40 : 48 }}>{t}</button>;
-const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13, color: "#9ca3af", marginTop: 5 }}>{hint}</div>}</div>;
-const H1 = ({ t }) => <div style={{ fontSize: 26, fontWeight: 700, marginBottom: 17 }}>{t}</div>;
-const H2 = ({ t }) => <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 13 }}>{t}</div>;
+const IN = { width: "100%", padding: "13px 14px", border: "1.5px solid #94a3b8", borderRadius: 11, fontSize: 17, fontWeight: 500, boxSizing: "border-box", background: "#fff", fontFamily: "inherit", outline: "none", color: "#000", WebkitTextFillColor: "#000", opacity: 1 };
+const LB = { display: "block", fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 7 };
+const Card = ({ children, s = {} }) => <div style={{ background: "#fff", borderRadius: 15, padding: "18px 20px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,.07)", ...s }}>{children}</div>;
+const Tag = ({ t, bg = "#e5e7eb", fg = "#1f2937" }) => <span style={{ fontSize: 13, fontWeight: 700, background: bg, color: fg, padding: "4px 10px", borderRadius: 99, display: "inline-block" }}>{t}</span>;
+const Empty = ({ t }) => <div style={{ textAlign: "center", padding: "40px 0", color: "#4b5563", fontSize: 16 }}>{t}</div>;
+const Dot = ({ n }) => n > 0 ? <span style={{ background: "#dc2626", color: "#fff", borderRadius: 99, fontSize: 12, fontWeight: 700, padding: "2px 7px", marginLeft: 5 }}>{n}</span> : null;
+const Btn = ({ t, on, bg = "#1e3a8a", fg = "#fff", full, sm, dis }) => <button onClick={dis ? undefined : on} style={{ padding: sm ? "10px 16px" : "14px 20px", background: bg, color: fg, border: "none", borderRadius: 11, fontSize: sm ? 15 : 17, fontWeight: 700, cursor: dis ? "default" : "pointer", opacity: dis ? .45 : 1, width: full ? "100%" : undefined, minHeight: sm ? 40 : 48 }}>{t}</button>;
+const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13.5, color: "#4b5563", marginTop: 5 }}>{hint}</div>}</div>;
+const H1 = ({ t }) => <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 17, color: "#0f172a" }}>{t}</div>;
+const H2 = ({ t }) => <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 13, color: "#0f172a" }}>{t}</div>;
 const Logo = ({ d, size = 54 }) => d.logo?.startsWith?.("data:")
   ? <img src={d.logo} alt="" style={{ width: size, height: size, borderRadius: size * .27, objectFit: "cover", background: "#fff", border: "1px solid #e5e7eb" }} />
   : <div style={{ width: size, height: size, background: "#1e3a8a", borderRadius: size * .27, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * .48 }}>{d.logo || "⚽"}</div>;
@@ -166,6 +170,26 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif", background: "#f9fafb", minHeight: "100vh", color: "#111" }}>
+      <style>{`
+        input, select, textarea {
+          color: #000 !important;
+          -webkit-text-fill-color: #000 !important;
+          opacity: 1 !important;
+          font-weight: 500;
+        }
+        input::placeholder, textarea::placeholder {
+          color: #64748b !important;
+          -webkit-text-fill-color: #64748b !important;
+          opacity: 1 !important;
+          font-weight: 400;
+        }
+        select { font-weight: 600; }
+        input:focus, select:focus, textarea:focus {
+          border-color: #1e3a8a !important;
+          box-shadow: 0 0 0 3px rgba(30,58,138,.12);
+        }
+        body { -webkit-text-size-adjust: 100%; }
+      `}</style>
       {storeErr && <div style={{ background: "#fef2f2", borderBottom: "1px solid #fca5a5", color: "#991b1b", padding: "12px 16px", fontSize: 14, fontWeight: 500, textAlign: "center" }}>⚠ {storeErr}</div>}
       {page === "login" && <Login {...P} setUser={setUser} setPage={setPage} />}
       {page === "reg" && <Register {...P} setPage={setPage} />}
@@ -514,7 +538,7 @@ function StockAudit({ d, up, user, team, say, logIt }) {
     setBusy(true); setSm("Reading image…");
     const b64 = await shrink(f);
     const known = items.map(i => `${i.name}${i.dose ? " " + i.dose : ""} (qty ${qtyAt(i)})`).join("; ");
-    const r = await askAI('Auditing medical stock . Photo may show a package (front/back) OR blister strips. Extract details; if strips visible count remaining pills. Respond ONLY with JSON no markdown: {"name":"","dose":"","batch":"","expiry":"","count":null,"is_strip":false,"confidence":"high|medium|low"}', `Known items here: ${known || "none"}`, b64);
+    const r = await askAI('Auditing medical stock. Photo may show a package (front/back) OR blister strips. Extract details; if strips visible count remaining pills. Respond ONLY with JSON no markdown: {"name":"","dose":"","batch":"","expiry":"","count":null,"is_strip":false,"confidence":"high|medium|low"}', `Known items here: ${known || "none"}`, b64);
     if (!r) { say("Could not read image", "error"); setSm(""); setBusy(false); return; }
     const match = items.find(i => r.name && i.name.toLowerCase().includes(String(r.name).toLowerCase().split(" ")[0]));
     if (match) { const q = r.count != null ? r.count : qtyAt(match); setC(p => ({ ...p, [match.id]: { on: true, qty: String(q), note: r.batch ? `Batch ${r.batch}` : "" } })); setSm(`✓ ${match.name} — ${r.is_strip ? `counted ${r.count} pills` : "package identified"}${r.batch ? ` · batch ${r.batch}` : ""}`); say(`Matched: ${match.name}`); }
