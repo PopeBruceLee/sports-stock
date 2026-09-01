@@ -72,11 +72,14 @@ const KINDS = [
   { k: "batch", label: "Batch / lot no." },
 ];
 
+/* Ordered tightest window first — alertOf returns the first band an item falls
+   inside, so this MUST stay ascending or everything lands in the widest band. */
 const LEVELS = [
-  { d: 365, label: "1 year", bg: "#fef9c3", fg: "#854d0e", br: "#fde047" },
-  { d: 180, label: "6 months", bg: "#fef3c7", fg: "#92400e", br: "#fcd34d" },
-  { d: 60, label: "2 months", bg: "#ffedd5", fg: "#9a3412", br: "#fb923c" },
+  { d: 0, label: "Expired", bg: "#fee2e2", fg: "#7f1d1d", br: "#dc2626" },
   { d: 30, label: "1 month", bg: "#fee2e2", fg: "#991b1b", br: "#f87171" },
+  { d: 60, label: "2 months", bg: "#ffedd5", fg: "#9a3412", br: "#fb923c" },
+  { d: 180, label: "6 months", bg: "#fef3c7", fg: "#92400e", br: "#fcd34d" },
+  { d: 365, label: "1 year", bg: "#fef9c3", fg: "#854d0e", br: "#fde047" },
 ];
 
 /* ── HELPERS ──────────────────────────────────────────────── */
@@ -719,7 +722,7 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
                       {used != null && used !== 0 && <div style={{ fontSize: 10.5, color: used > 0 ? "#0369a1" : "#16a34a", marginTop: 2 }}>{used > 0 ? `${used} used since last audit` : `${-used} added`}</div>}</div>
                     <div><label style={{ ...LB, fontSize: 11 }}>Notes</label><input value={st.note || ""} onChange={e => setNo(i.id, e.target.value)} style={{ ...IN, padding: "6px 9px", fontSize: 14 }} placeholder="Optional" /></div></div>
                 </>}
-              </div>{a && <Tag t={`${dLeft(i.expiry)}d`} bg={a.bg} fg={a.fg} />}</div></Card>);
+              </div>{a && <Tag t={dLeft(i.expiry) < 0 ? "EXPIRED" : `${dLeft(i.expiry)}d`} bg={a.bg} fg={a.fg} />}</div></Card>);
         })}</div>
       </div>}
   </div>);
@@ -931,7 +934,7 @@ function Expiry({ d }) {
   return (<div><H1 t="Expiry Alerts" />
     <div style={{ display: "flex", gap: 7, marginBottom: 15, flexWrap: "wrap" }}>{LEVELS.map(l => <div key={l.label} style={{ background: l.bg, border: `1px solid ${l.br}`, color: l.fg, borderRadius: 9, padding: "6px 11px", fontSize: 12, fontWeight: 600 }}>{l.label}: {list.filter(i => i.a.label === l.label).length}</div>)}</div>
     {!list.length && <Empty t="No expiry alerts — all items within date" />}
-    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{list.map(i => <Card key={i.id} s={{ borderLeft: `4px solid ${i.a.br}`, background: i.a.bg }}><div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{i.name} {i.dose}</div><div style={{ fontSize: 12, color: "#374151", marginTop: 3 }}>📍 {i.locs.map(l => `${l.name} (${l.qty})`).join(", ")} · Expires {fmtD(i.expiry)}</div><div style={{ fontSize: 11, color: T_MUTED }}>Batch: {i.batch || "—"}</div></div><div style={{ textAlign: "right" }}><div style={{ fontSize: 22, fontWeight: 800, color: i.a.fg }}>{dLeft(i.expiry)}</div><div style={{ fontSize: 10, color: i.a.fg }}>days</div></div></div></Card>)}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{list.map(i => <Card key={i.id} s={{ borderLeft: `4px solid ${i.a.br}`, background: i.a.bg }}><div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{i.name} {i.dose}</div><div style={{ fontSize: 12, color: "#374151", marginTop: 3 }}>📍 {i.locs.map(l => `${l.name} (${l.qty})`).join(", ")} · Expires {fmtD(i.expiry)}</div><div style={{ fontSize: 11, color: T_MUTED }}>Batch: {i.batch || "—"}</div></div><div style={{ textAlign: "right" }}><div style={{ fontSize: 22, fontWeight: 800, color: i.a.fg }}>{Math.abs(dLeft(i.expiry))}</div><div style={{ fontSize: 10, color: i.a.fg }}>{dLeft(i.expiry) < 0 ? "days ago" : dLeft(i.expiry) === 0 ? "today" : "days"}</div></div></div></Card>)}</div>
   </div>);
 }
 
