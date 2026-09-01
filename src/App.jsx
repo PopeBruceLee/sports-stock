@@ -116,8 +116,9 @@ const pwCheck = p => {
 const askAI = async (system, msg, img) => {
   if (!AI_ENDPOINT) return null;
   try {
-    const content = img
-      ? [{ type: "image", source: { type: "base64", media_type: "image/jpeg", data: img } }, { type: "text", text: msg }]
+    const imgs = Array.isArray(img) ? img : img ? [img] : [];
+    const content = imgs.length
+      ? [...imgs.map(b => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: b } })), { type: "text", text: msg }]
       : msg;
     const r = await fetch(AI_ENDPOINT, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -166,33 +167,27 @@ const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [],
 /* ── PHOTO BLOCK ──────────────────────────────────────────── */
 /* Used when adding an item and again during audit. One or more photos per
    element, so the name, expiry, amount and batch are all evidenced. */
-function PhotoBlock({ shots, onAdd, onDel, busy, only }) {
-  const kinds = only ? KINDS.filter(k => only.includes(k.k)) : KINDS;
-  const refs = useRef({});
+function PhotoBlock({ shots, onAdd, onDel, busy }) {
+  const ref = useRef();
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {kinds.map(kd => {
-        const mine = shots.filter(s => s.kind === kd.k);
-        return (
-          <div key={kd.k} style={{ border: "1px solid #e2e8f0", borderRadius: 11, padding: "10px 12px", background: mine.length ? "#f0fdf4" : "#fff" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1f2937" }}>{kd.label}{mine.length > 0 && <span style={{ color: "#16a34a", fontWeight: 500 }}> · {mine.length}</span>}</div>
-              <input type="file" accept="image/*" capture="environment" multiple ref={r => refs.current[kd.k] = r} style={{ display: "none" }}
-                onChange={e => { if (e.target.files?.length) onAdd(kd.k, e.target.files); e.target.value = ""; }} />
-              <button onClick={() => refs.current[kd.k]?.click()} disabled={busy}
-                style={{ background: "#1e3a8a", color: "#fff", border: "none", borderRadius: 9, padding: "7px 13px", fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: busy ? .5 : 1, whiteSpace: "nowrap" }}>
-                {busy ? "…" : "📷 Photo"}
-              </button>
-            </div>
-            {mine.length > 0 && <div style={{ display: "flex", gap: 7, marginTop: 9, overflowX: "auto", paddingBottom: 2 }}>
-              {mine.map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
-                <img src={s.data} alt={kd.label} style={{ width: 74, height: 74, objectFit: "cover", borderRadius: 9, border: "1px solid #e2e8f0" }} />
-                <button onClick={() => onDel(s.id)} style={{ position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 12, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>×</button>
-              </div>)}
-            </div>}
-          </div>
-        );
-      })}
+    <div style={{ border: "1px solid #e2e8f0", borderRadius: 11, padding: "11px 13px", background: shots.length ? "#f0fdf4" : "#fff" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: "#1f2937" }}>
+          {shots.length ? `${shots.length} photo${shots.length !== 1 ? "s" : ""} on file` : "No photos yet"}
+        </div>
+        <input type="file" accept="image/*" capture="environment" multiple ref={ref} style={{ display: "none" }}
+          onChange={e => { if (e.target.files?.length) onAdd(e.target.files); e.target.value = ""; }} />
+        <button onClick={() => ref.current?.click()} disabled={busy}
+          style={{ background: "#1e3a8a", color: "#fff", border: "none", borderRadius: 9, padding: "8px 14px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", opacity: busy ? .5 : 1, whiteSpace: "nowrap" }}>
+          {busy ? "…" : "\ud83d\udcf7 Add photo"}
+        </button>
+      </div>
+      {shots.length > 0 && <div style={{ display: "flex", gap: 7, marginTop: 10, overflowX: "auto", paddingBottom: 2 }}>
+        {shots.map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
+          <img src={s.data} alt="" style={{ width: 78, height: 78, objectFit: "cover", borderRadius: 9, border: "1px solid #e2e8f0" }} />
+          <button onClick={() => onDel(s.id)} style={{ position: "absolute", top: -6, right: -6, width: 22, height: 22, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 12, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>\u00d7</button>
+        </div>)}
+      </div>}
     </div>
   );
 }
@@ -634,11 +629,11 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
   const setNo = (id, v) => setC(p => ({ ...p, [id]: { ...p[id], note: v } }));
 
   /* Add evidence photos mid-audit */
-  const attach = async (item, kind, files) => {
+  const attach = async (item, files) => {
     let pg = item.pg;
     if (!pg) { pg = uid(); up(x => ({ ...x, items: x.items.map(y => y.id === item.id ? { ...y, pg } : y) })); }
     const add = [];
-    for (const f of Array.from(files)) { try { add.push({ id: uid(), kind, data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
+    for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
     setPh(p => ({ ...p, [pg]: [...(p[pg] || []), ...add] }));
     say(`${add.length} photo${add.length !== 1 ? "s" : ""} added`);
   };
@@ -702,18 +697,24 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 11, marginBottom: 6 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: done ? "#166534" : "#92400e" }}>{done ? "✓ All elements confirmed" : `${els(i).filter(k => elOK(i, k.k)).length}/${els(i).length} elements confirmed`}</div>
                     <button onClick={() => allEl(i)} style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, color: "#1e3a8a", cursor: "pointer" }}>Confirm all</button></div>
+                  <div style={{ border: "1px solid #e2e8f0", borderRadius: 9, padding: "9px 11px", marginBottom: 7, background: "#fff" }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 9 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{shotsOf(i).length ? `${shotsOf(i).length} photo${shotsOf(i).length !== 1 ? "s" : ""} on file` : "No photos on file"}</div>
+                      <AuditShot onPick={files => attach(i, files)} />
+                    </div>
+                    {shotsOf(i).length > 0
+                      ? <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>{shotsOf(i).map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
+                          <img src={s.data} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: "1px solid #e2e8f0" }} />
+                          <button onClick={() => detach(i, s.id)} style={{ position: "absolute", top: -5, right: -5, width: 19, height: 19, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 11, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>\u00d7</button></div>)}</div>
+                      : <div style={{ fontSize: 11, color: "#d97706", marginTop: 6 }}>Tap \ud83d\udcf7 to capture the item \u2014 one shot showing name, expiry, amount and batch is enough</div>}
+                  </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{els(i).map(k => {
-                    const okd = elOK(i, k.k); const shots = shotsOf(i).filter(s => s.kind === k.k);
+                    const okd = elOK(i, k.k);
                     return (<div key={k.k} style={{ border: `1px solid ${okd ? "#bbf7d0" : "#e2e8f0"}`, background: okd ? "#f0fdf4" : "#fff", borderRadius: 9, padding: "8px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                         <input type="checkbox" checked={okd} onChange={() => togEl(i, k.k)} style={{ width: 18, height: 18, accentColor: "#16a34a", flexShrink: 0 }} />
                         <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600 }}>{k.label}</div><div style={{ fontSize: 12, color: T_MUTED, overflow: "hidden", textOverflow: "ellipsis" }}>{valueOf(i, k.k)}</div></div>
-                        <AuditShot onPick={files => attach(i, k.k, files)} />
                       </div>
-                      {shots.length > 0 && <div style={{ display: "flex", gap: 6, marginTop: 7, overflowX: "auto" }}>{shots.map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
-                        <img src={s.data} alt={k.label} style={{ width: 62, height: 62, objectFit: "cover", borderRadius: 8, border: "1px solid #e2e8f0" }} />
-                        <button onClick={() => detach(i, s.id)} style={{ position: "absolute", top: -5, right: -5, width: 19, height: 19, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 11, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>×</button></div>)}</div>}
-                      {shots.length === 0 && <div style={{ fontSize: 10.5, color: "#d97706", marginTop: 5 }}>No photo on file — tap 📷 to capture one</div>}
                     </div>);
                   })}</div>
                   <div style={{ marginTop: 9, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 7 }}>
@@ -745,6 +746,7 @@ function AddItems({ d, up, user, say, ph, setPh }) {
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
+  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const scanRef = useRef();
   const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false);
   const [xf, setXf] = useState(null); const [xt, setXt] = useState(""); const [xc, setXc] = useState("");
   const isMed = cat === "Medications"; const totalQty = +qty || 0;
@@ -781,12 +783,50 @@ function AddItems({ d, up, user, say, ph, setPh }) {
   const bumpLoc = l => { if (!totalQty) return say("Enter a quantity first", "error"); if (remaining <= 0) return say(`All ${totalQty} already allocated`, "warn"); setLocQty(p => ({ ...p, [l]: (p[l] || 0) + 1 })); };
   const dropLoc = l => setLocQty(p => { const c = (p[l] || 0) - 1; const n = { ...p }; if (c <= 0) delete n[l]; else n[l] = c; return n; });
   const setVariantCount = n => setVariants(Array.from({ length: n }, (_, i) => variants[i] || { qty: "1", expiry: "", batch: "" }));
-  const addPics = async (kind, files) => {
+  const addPics = async files => {
     setPicBusy(true); const add = [];
-    for (const f of Array.from(files)) { try { add.push({ id: uid(), kind, data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
+    for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
     setPics(p => [...p, ...add]); setPicBusy(false);
   };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setShow(false); };
+
+  /* Scan to fill — reads the label and populates the fields. Images are never stored. */
+  const scanFill = async files => {
+    if (!AI_ENDPOINT) return say("Scanning needs the AI endpoint — see AI SETUP at the foot of App.jsx", "warn");
+    setScanBusy(true); setScanMsg("");
+    const imgs = [];
+    for (const f of Array.from(files).slice(0, 4)) { try { imgs.push(await shrink(f)); } catch {} }
+    if (!imgs.length) { setScanBusy(false); return say("Could not open those photos", "error"); }
+    const known = prior.slice(0, 40).map(p => p.name).join("; ");
+    const r = await askAI(
+      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
+      `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
+      imgs);
+    setScanBusy(false);
+    if (!r) return say("Could not read that — fill the fields in manually", "error");
+    const got = [], kept = [], missed = [];
+    const rd = v => (v == null ? "" : String(v).trim());
+    if (rd(r.name)) { if (name.trim()) kept.push("name"); else { onName(rd(r.name)); got.push(`name (${rd(r.name)})`); } } else missed.push("name");
+    if (rd(r.dose)) { if (!dose) { setDose(rd(r.dose)); got.push(`dose (${rd(r.dose)})`); } else kept.push("dose"); }
+    if (rd(r.expiry)) {
+      if (!expValid(rd(r.expiry))) missed.push(`expiry (read "${rd(r.expiry)}" — not a date the app accepts)`);
+      else if (expiry) kept.push("expiry");
+      else { setExpiry(rd(r.expiry)); got.push(`expiry (${fmtD(rd(r.expiry))})`); }
+    } else missed.push("expiry");
+    if (rd(r.batch)) { if (batch) kept.push("batch"); else { setBatch(rd(r.batch)); got.push(`batch (${rd(r.batch)})`); } } else missed.push("batch / lot");
+    const count = r.remaining ?? r.total;
+    if (count != null && !isNaN(+count)) {
+      if (qty) kept.push("quantity");
+      else { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); got.push(`quantity (${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""})`); }
+    } else missed.push("quantity");
+    setScanMsg([
+      got.length ? `Filled in: ${got.join(", ")}.` : "Nothing could be filled in from that.",
+      kept.length ? `Left alone because you'd already typed them: ${kept.join(", ")}.` : "",
+      missed.length ? `Couldn't read: ${missed.join(", ")} — add by hand.` : "",
+      "Check every field against the packaging before saving.",
+    ].filter(Boolean).join(" "));
+    if (got.length) say(`${got.length} field${got.length !== 1 ? "s" : ""} filled in`);
+  };
 
   const add = () => {
     if (!name.trim()) return say("Item name required", "error");
@@ -823,6 +863,17 @@ function AddItems({ d, up, user, say, ph, setPh }) {
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}><H1 t="Item Register" /><Btn t={show ? "Cancel" : "+ Add"} on={() => show ? reset() : setShow(true)} sm /></div>
     {show && <Card s={{ marginBottom: 13 }}><H2 t="Add Item" /><div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: "13px 14px" }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: "#1e40af" }}>Scan to fill</div>
+        <div style={{ fontSize: 13.5, color: "#1e40af", marginTop: 4, marginBottom: 10, lineHeight: 1.45 }}>
+          Photograph the packaging, the printed expiry, the strips and the batch number — front and back, up to four shots at once. Whatever is legible drops into the fields below. These shots are read and discarded, not stored.
+        </div>
+        <input type="file" accept="image/*" capture="environment" multiple ref={scanRef} style={{ display: "none" }}
+          onChange={e => { if (e.target.files?.length) scanFill(e.target.files); e.target.value = ""; }} />
+        <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy || !AI_ENDPOINT} full />
+        {!AI_ENDPOINT && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 9, lineHeight: 1.45 }}>Scanning is switched off until AI_ENDPOINT is set — see AI SETUP at the foot of this file. Fill the fields in by hand meanwhile.</div>}
+        {scanMsg && <div style={{ marginTop: 10, background: "#fff", border: "1px solid #bfdbfe", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#1f2937", lineHeight: 1.5 }}>{scanMsg}</div>}
+      </div>
       <div><label style={LB}>Item Name</label>
         <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={IN} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
         <datalist id="prioritems">{prior.map(p => <option key={p.id} value={p.name}>{catOf(p.cat, cats).label}</option>)}</datalist>
@@ -872,7 +923,7 @@ function AddItems({ d, up, user, say, ph, setPh }) {
 
       {/* Photo evidence */}
       <div><label style={LB}>Photos</label>
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: -3, marginBottom: 9 }}>Capture the product name, expiry, amount remaining and batch number. These are shown at audit, where each element is signed off separately.</div>
+        <div style={{ fontSize: 13, color: T_MUTED, marginTop: -3, marginBottom: 9 }}>One shot showing the name, expiry, amount remaining and batch number is usually enough \u2014 add more only where something is unreadable or printed elsewhere on the pack. These are the evidence shown at audit.</div>
         <PhotoBlock shots={pics} busy={picBusy} onAdd={addPics} onDel={id => setPics(p => p.filter(s => s.id !== id))} />
         {pics.length > 0 && <div style={{ fontSize: 12, color: "#16a34a", marginTop: 7, fontWeight: 600 }}>{pics.length} photo{pics.length !== 1 ? "s" : ""} attached</div>}</div>
 
