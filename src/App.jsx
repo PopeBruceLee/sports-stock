@@ -376,7 +376,7 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
 
   const P = { d, up, user, team, say, logIt, rec, ph, setPh };
   const medT = [["dash", "Dashboard"], ["inv", "Inventory"], ["pills", "Pill Count"], ["disp", "Dispense"], ["trend", "Trends"], ...(isDoc ? [["req", "Requests", pend], ["aud", "Audit"], ["cfg", "Settings"]] : [])];
-  const invT = [["idash", "Dashboard"], ["chk", "Stock Audit"], ["add", "Add"], ["loc", "Locations"], ["cats", "Sections"], ["exp", "Alerts", d.items.filter(i => alertOf(i.expiry)).length], ["ord", "Orders", ordN], ["hist", "History"]];
+  const invT = [["idash", "Dashboard"], ["chk", "Stock Audit"], ["add", "Add"], ["loc", "Setup"], ["exp", "Alerts", d.items.filter(i => alertOf(i.expiry)).length], ["ord", "Orders", ordN], ["hist", "History"]];
   const admT = [["users", "Approvals", pendUsers], ["team", "Team"], ["brand", "Branding"], ["backup", "Backup"]];
   const tabs = mod === "med" ? medT : mod === "inv" ? invT : admT;
   const sw = m => { setMod(m); setTab(m === "med" ? "dash" : m === "inv" ? "idash" : "users"); };
@@ -392,7 +392,10 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
               <div style={{ fontSize: 13, color: T_MUTED, marginTop: 2 }}>{user.name} · <span style={{ color: ROLE_COL[user.role], fontWeight: 600 }}>{ROLES[user.role]}</span></div></div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            {user.teams.length > 1 && <select value={team} onChange={e => setTeam(e.target.value)} style={{ fontSize: 13, border: "1px solid #e5e7eb", borderRadius: 8, padding: "7px 8px", maxWidth: 110 }}>{user.teams.map(t => <option key={t}>{t}</option>)}</select>}
+            {user.teams.length > 1 && <div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: T_MUTED, marginBottom: 2 }}>Team</div>
+              <select value={team} onChange={e => setTeam(e.target.value)} style={{ fontSize: 14, fontWeight: 600, color: "#1e3a8a", background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 9, padding: "8px 10px", maxWidth: 190, minHeight: 40 }}>{user.teams.map(t => <option key={t}>{t}</option>)}</select>
+            </div>}
             <button onClick={() => { setUser(null); setPage("login"); }} style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: T_MUTED, cursor: "pointer", minHeight: 40 }}>Out</button>
           </div>
         </div>
@@ -411,8 +414,7 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
         {mod === "inv" && tab === "idash" && <InvDash {...P} />}
         {mod === "inv" && tab === "chk" && <StockAudit {...P} />}
         {mod === "inv" && tab === "add" && <AddItems {...P} />}
-        {mod === "inv" && tab === "loc" && <Locs {...P} />}
-        {mod === "inv" && tab === "cats" && <Sections {...P} />}
+        {mod === "inv" && tab === "loc" && <><Locs {...P} /><div style={{ marginTop: 26 }}><Sections {...P} /></div></>}
         {mod === "inv" && tab === "exp" && <Expiry {...P} />}
         {mod === "inv" && tab === "ord" && <Orders {...P} />}
         {mod === "inv" && tab === "hist" && <Hist {...P} />}
@@ -589,7 +591,9 @@ function InvDash({ d }) {
   const cats = catsOf(d); const items = d.items;
   const byLevel = LEVELS.map(l => ({ ...l, n: items.filter(i => alertOf(i.expiry)?.label === l.label).length }));
   const byLoc = d.invLocs.map(l => { const c = [...d.checks].filter(x => x.loc === l).sort((a, b) => new Date(b.at) - new Date(a.at))[0]; return { loc: l, last: c, days: c ? Math.floor((new Date() - new Date(c.at)) / 86400000) : null, n: items.filter(i => i.locs.some(x => x.name === l)).length }; });
-  const byCat = cats.map(c => ({ ...c, n: items.filter(i => i.cat === c.k).length })).filter(c => c.n > 0);
+  const unCat = items.filter(i => !i.cat).length;
+  const byCat = [...cats.map(c => ({ ...c, n: items.filter(i => i.cat === c.k).length })),
+    ...(unCat ? [{ k: "", label: "Uncategorised", col: "#f1f5f9", fg: "#334155", n: unCat }] : [])].filter(c => c.n > 0);
   const mmLocs = d.invLocs.map(l => ({ loc: l, n: d.checks.filter(c => c.loc === l).reduce((s, c) => s + (c.mm?.length || 0), 0) })).filter(x => x.n > 0).sort((a, b) => b.n - a.n);
   const recent = [...d.checks].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 5);
   return (<div><H1 t="Inventory Dashboard" />
@@ -747,6 +751,7 @@ function AddItems({ d, up, user, say, ph, setPh }) {
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
   const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const scanRef = useRef();
+  const [newCat, setNewCat] = useState(""); const [showNewCat, setShowNewCat] = useState(false);
   const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false);
   const [xf, setXf] = useState(null); const [xt, setXt] = useState(""); const [xc, setXc] = useState("");
   const isMed = cat === "Medications"; const totalQty = +qty || 0;
@@ -788,7 +793,16 @@ function AddItems({ d, up, user, say, ph, setPh }) {
     for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
     setPics(p => [...p, ...add]); setPicBusy(false);
   };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setNewCat(""); setShowNewCat(false); setShow(false); };
+
+  const addCat = () => {
+    const t = newCat.trim();
+    if (!t) return say("Enter a section name", "error");
+    if (cats.some(c => c.k.toLowerCase() === t.toLowerCase() || c.label.toLowerCase() === t.toLowerCase())) return say("That section already exists", "error");
+    const pal = CAT_PALETTE[cats.length % CAT_PALETTE.length];
+    up(x => ({ ...x, cats: [...catsOf(x), { k: t, label: t, col: pal.col, fg: pal.fg }] }));
+    setCat(t); setCatAuto(false); setNewCat(""); setShowNewCat(false); say(`"${t}" added`);
+  };
 
   /* Scan to fill — reads the label and populates the fields. Images are never stored. */
   const scanFill = async files => {
@@ -830,7 +844,6 @@ function AddItems({ d, up, user, say, ph, setPh }) {
 
   const add = () => {
     if (!name.trim()) return say("Item name required", "error");
-    if (!cat) return say("Choose a section", "error");
     if (!totalQty) return say("Enter the quantity being added", "error");
     const locs = Object.entries(locQty).filter(([, n]) => n > 0).map(([nm, n]) => ({ name: nm, qty: n }));
     if (!locs.length) return say("Assign the item to at least one location", "error");
@@ -853,8 +866,9 @@ function AddItems({ d, up, user, say, ph, setPh }) {
   const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); say("Removed"); };
   const move = () => {
     if (!xt && !xc) return say("Choose a location or a section to move to", "error");
-    up(x => ({ ...x, items: x.items.map(i => i.id === xf.id ? { ...i, ...(xt ? { locs: [{ name: xt, qty: i.qty }] } : {}), ...(xc ? { cat: xc } : {}) } : i) }));
-    say(`${xf.name} moved${xt ? ` → ${xt}` : ""}${xc ? ` → ${catOf(xc, cats).label}` : ""}`);
+    const nextCat = xc === "_none" ? "" : xc;
+    up(x => ({ ...x, items: x.items.map(i => i.id === xf.id ? { ...i, ...(xt ? { locs: [{ name: xt, qty: i.qty }] } : {}), ...(xc ? { cat: nextCat } : {}) } : i) }));
+    say(`${xf.name} moved${xt ? ` → ${xt}` : ""}${xc ? ` → ${xc === "_none" ? "Uncategorised" : catOf(xc, cats).label}` : ""}`);
     setXf(null); setXt(""); setXc("");
   };
   const usedCats = [...new Set(d.items.map(i => i.cat))];
@@ -878,10 +892,17 @@ function AddItems({ d, up, user, say, ph, setPh }) {
         <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={IN} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
         <datalist id="prioritems">{prior.map(p => <option key={p.id} value={p.name}>{catOf(p.cat, cats).label}</option>)}</datalist>
         <div style={{ fontSize: 13, color: filled ? "#16a34a" : T_MUTED, marginTop: 5 }}>{filled ? `✓ Matched a previous entry — section and dose filled in` : prior.length ? `Suggestions from ${prior.length} item${prior.length !== 1 ? "s" : ""} already registered` : "First item — no suggestions yet"}</div></div>
-      <div><label style={LB}>Section <span style={{ color: "#ef4444" }}>*</span> {catBusy && <span style={{ color: "#1e3a8a", fontSize: 11 }}>· suggesting…</span>}{catAuto && !catBusy && <span style={{ color: "#16a34a", fontSize: 11 }}>· suggested</span>}</label>
-        <select value={cat} onChange={e => { setCat(e.target.value); setCatAuto(false); }} style={{ ...IN, background: cat ? catOf(cat, cats).col : "#fff", color: cat ? catOf(cat, cats).fg : "#000", fontWeight: 600 }}>
-          <option value="">Choose a section…</option>{cats.map(c => <option key={c.k} value={c.k}>{c.label}</option>)}</select>
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: 5 }}>Add or remove sections in the Sections tab.</div></div>
+      <div><label style={LB}>Section {catBusy && <span style={{ color: "#1e3a8a", fontSize: 11 }}>· suggesting…</span>}{catAuto && !catBusy && <span style={{ color: "#16a34a", fontSize: 11 }}>· suggested</span>}</label>
+        <select value={showNewCat ? "_new" : cat}
+          onChange={e => { if (e.target.value === "_new") setShowNewCat(true); else { setCat(e.target.value); setShowNewCat(false); setCatAuto(false); } }}
+          style={{ ...IN, background: cat && !showNewCat ? catOf(cat, cats).col : "#fff", color: cat && !showNewCat ? catOf(cat, cats).fg : "#000", fontWeight: 600 }}>
+          <option value="">No section</option>
+          {cats.map(c => <option key={c.k} value={c.k}>{c.label}</option>)}
+          <option value="_new">+ Add new section…</option></select>
+        {showNewCat && <div style={{ display: "flex", gap: 7, marginTop: 8 }}>
+          <input value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key === "Enter" && addCat()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK kit" autoFocus />
+          <Btn t="✓" on={addCat} sm /><Btn t="✕" on={() => { setShowNewCat(false); setNewCat(""); }} bg="#f3f4f6" fg="#374151" sm /></div>}
+        <div style={{ fontSize: 13, color: T_MUTED, marginTop: 5 }}>Optional. Leave it blank and the item files under Uncategorised — you can set it later from the → button.</div></div>
       {isMed && <div><label style={LB}>Dose / Strength</label><div style={{ display: "flex", gap: 7 }}>
         {doses.length ? <select value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }}><option value="">Select strength…</option>{doses.map(x => <option key={x}>{x}</option>)}</select> : <input value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="e.g. 400mg" />}
         <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm /></div></div>}
@@ -936,7 +957,7 @@ function AddItems({ d, up, user, say, ph, setPh }) {
     {usedCats.length > 1 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>{["All", ...usedCats].map(c => { const co = c === "All" ? { col: "#f3f4f6", fg: "#374151" } : catOf(c, cats); return <button key={c} onClick={() => setFilt(c)} style={{ padding: "5px 11px", borderRadius: 99, border: `1px solid ${filt === c ? co.fg : "#cbd5e1"}`, background: filt === c ? co.col : "#fff", color: filt === c ? co.fg : T_MUTED, fontSize: 12.5, fontWeight: filt === c ? 700 : 400, cursor: "pointer" }}>{c === "All" ? "All sections" : co.label}</button>; })}</div>}
     {xf && <Card s={{ marginBottom: 10, border: "2px solid #1e3a8a" }}><H2 t="Move Item" /><p style={{ fontSize: 13, margin: "0 0 11px" }}><b>{xf.name}</b> — currently in {catOf(xf.cat, cats).label}, at {xf.locs.map(l => l.name).join(", ")}</p>
       <label style={{ ...LB, fontSize: 13 }}>Move to location</label><select value={xt} onChange={e => setXt(e.target.value)} style={IN}><option value="">Leave where it is</option>{d.invLocs.map(l => <option key={l}>{l}</option>)}</select>
-      <label style={{ ...LB, fontSize: 13, marginTop: 11 }}>Move to section</label><select value={xc} onChange={e => setXc(e.target.value)} style={IN}><option value="">Leave in {catOf(xf.cat, cats).label}</option>{cats.filter(c => c.k !== xf.cat).map(c => <option key={c.k} value={c.k}>{c.label}</option>)}</select>
+      <label style={{ ...LB, fontSize: 13, marginTop: 11 }}>Move to section</label><select value={xc} onChange={e => setXc(e.target.value)} style={IN}><option value="">Leave in {catOf(xf.cat, cats).label}</option>{xf.cat && <option value="_none">No section</option>}{cats.filter(c => c.k !== xf.cat).map(c => <option key={c.k} value={c.k}>{c.label}</option>)}</select>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}><Btn t="Move" on={move} sm /><Btn t="Cancel" on={() => { setXf(null); setXt(""); setXc(""); }} bg="#f3f4f6" fg="#374151" sm /></div></Card>}
     {!d.items.length && <Empty t="No items registered yet — tap + Add" />}
     {d.items.length > 0 && !sel.length && <Empty t="Choose one or more locations above to see your items" />}
@@ -970,7 +991,7 @@ function Sections({ d, up, say }) {
   const rm = k => { up(x => ({ ...x, cats: catsOf(x).filter(c => c.k !== k) })); setCf(null); say("Section removed"); };
   return (<div><H1 t="Sections" />
     <Card s={{ marginBottom: 13 }}><H2 t="Add Section" /><div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK Kit" /><Btn t="Add" on={add} sm /></div>
-      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>Sections group your items on the dashboard, in the register and at audit. A section holding items can't be removed — move those items to another section first.</div></Card>
+      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>Sections are optional — they group items on the dashboard, in the register and at audit. You can also add one straight from the Section dropdown while adding an item. A section holding items can't be removed until you move those items out.</div></Card>
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cats.map(c => { const n2 = count(c.k); return <Card key={c.k} s={{ padding: "11px 14px", borderLeft: `4px solid ${c.fg}` }}>
       {cf === c.k ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>Remove "{c.label}"?</span><div style={{ display: "flex", gap: 7 }}><Btn t="Remove" on={() => rm(c.k)} bg="#dc2626" sm /><Btn t="Cancel" on={() => setCf(null)} bg="#f3f4f6" fg="#374151" sm /></div></div>
         : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

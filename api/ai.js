@@ -1,20 +1,79 @@
-{\rtf1\ansi\ansicpg1252\cocoartf2822
-\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
-{\colortbl;\red255\green255\blue255;}
-{\*\expandedcolortbl;;}
-\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
-\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+/* ============================================================
+   /api/ai.js — Sports Stock App
+   ------------------------------------------------------------
+   Save this as  api/ai.js  in the ROOT of your project
+   (alongside package.json, NOT inside src/).
 
-\f0\fs24 \cf0 export default async function handler(req, res) \{\
-  if (req.method !== "POST") return res.status(405).json(\{ error: "POST only" \});\
-  const r = await fetch("https://api.anthropic.com/v1/messages", \{\
-    method: "POST",\
-    headers: \{\
-      "Content-Type": "application/json",\
-      "x-api-key": process.env.ANTHROPIC_API_KEY,\
-      "anthropic-version": "2023-06-01"\
-    \},\
-    body: JSON.stringify(req.body)\
-  \});\
-  res.status(r.status).json(await r.json());\
-\}}
+   Vercel turns anything in /api into a serverless function, so
+   this becomes available at  /api/ai  once deployed. Its whole
+   job is to hold the Anthropic API key server-side and pass
+   requests through, so the key never reaches the browser.
+
+   Then set, at the top of src/App.jsx:
+       const AI_ENDPOINT = "/api/ai";
+
+   And in Vercel → Settings → Environment Variables add:
+       ANTHROPIC_API_KEY = sk-ant-...
+   ============================================================ */
+
+const ALLOWED_MODELS = ["claude-sonnet-4-6"];
+const MAX_TOKENS = 1200;
+
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "POST only" });
+  }
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: "ANTHROPIC_API_KEY is not set on the server" });
+  }
+
+  const { model, system, messages, max_tokens } = req.body || {};
+
+  // Only let through the shapes this app actually sends — the endpoint is
+  // public once deployed, so don't forward arbitrary requests on your key.
+  if (!Array.isArray(messages) || !messages.length) {
+    return res.status(400).json({ error: "messages required" });
+  }
+  if (model && !ALLOWED_MODELS.includes(model)) {
+    return res.status(400).json({ error: "model not allowed" });
+  }
+
+  try {
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: model || ALLOWED_MODELS[0],
+        max_tokens: Math.min(max_tokens || 800, MAX_TOKENS),
+        system,
+        messages,
+      }),
+    });
+
+    const data = await r.json();
+    if (!r.ok) console.error("Anthropic error:", r.status, data);
+    return res.status(r.status).json(data);
+  } catch (err) {
+    console.error("Proxy failed:", err);
+    return res.status(502).json({ error: "Upstream request failed" });
+  }
+}
+
+/* ------------------------------------------------------------
+   Photos are sent as base64 inside the JSON body, so bodies run
+   to a few hundred KB. If Vercel rejects a scan as too large,
+   add this to vercel.json in the project root:
+
+   {
+     "functions": {
+       "api/ai.js": { "maxDuration": 30 }
+     }
+   }
+
+   The app already shrinks images to ~900px before sending, which
+   keeps a four-photo scan comfortably inside the default limits.
+   ------------------------------------------------------------ */
