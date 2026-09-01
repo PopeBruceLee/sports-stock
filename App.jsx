@@ -28,7 +28,7 @@ import { useState, useEffect, useRef } from "react";
 
 /* ── CONFIG ────────────────────────────────────────────────── */
 const CLUB_DOMAIN = "cpfc.co.uk";     // required email domain
-const AI_ENDPOINT = "";               // e.g. "/api/ai" — leave "" to disable AI
+const AI_ENDPOINT = "/api/ai";        // set to "" to switch every AI feature off
 const STORE_KEY   = "sportsstock_v1";
 const PHOTO_KEY   = "sportsstock_v1_photos";
 
@@ -36,7 +36,8 @@ const PHOTO_KEY   = "sportsstock_v1_photos";
 const T_MUTED = "#4b5563";   // secondary text (was #6b7280)
 const T_FAINT = "#64748b";   // tertiary text (was #9ca3af)
 
-const TEAMS = ["Women's First Team", "Men's First Team", "Academy"];
+const TEAMS = ["Men's First Team", "Women's First Team", "Academy"];
+const DEFAULT_TEAM = "Men's First Team";
 const ROLES = { super_admin: "Super Admin", doctor: "Doctor", physiotherapist: "Physiotherapist", sports_therapist: "Sports Therapist" };
 const ROLE_COL = { super_admin: "#7c3aed", doctor: "#1d4ed8", physiotherapist: "#0369a1", sports_therapist: "#0f766e" };
 
@@ -127,9 +128,12 @@ const pwCheck = p => {
   return { checks: c, valid: c.filter(x => x.ok).length >= 4 && p.length >= 7 };
 };
 
-/* AI helper — returns null if disabled or fails */
+/* AI helper — returns parsed JSON, or null with the reason left in AI_ERR so the
+   screen can say what actually went wrong instead of failing silently. */
+let AI_ERR = "";
 const askAI = async (system, msg, img) => {
-  if (!AI_ENDPOINT) return null;
+  AI_ERR = "";
+  if (!AI_ENDPOINT) { AI_ERR = "AI_ENDPOINT is empty at the top of App.jsx."; return null; }
   try {
     const imgs = Array.isArray(img) ? img : img ? [img] : [];
     const content = imgs.length
@@ -139,10 +143,25 @@ const askAI = async (system, msg, img) => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 800, system, messages: [{ role: "user", content }] })
     });
+    if (!r.ok) {
+      AI_ERR = r.status === 404
+        ? "No /api/ai on this server. Either the api/ai.js function isn't deployed, or you're on a local npm run dev — Vite doesn't run serverless functions. Use npx vercel dev, or test on the deployed URL."
+        : r.status === 401 || r.status === 403
+          ? "The Anthropic API key was rejected. Check ANTHROPIC_API_KEY in Vercel, and that the account has credit."
+          : r.status === 500
+            ? "The server errored — usually ANTHROPIC_API_KEY missing, or the deployment ran before you added it. Add it, then redeploy."
+            : `The AI endpoint returned ${r.status}.`;
+      return null;
+    }
     const j = await r.json();
     const txt = j.content?.[0]?.text || "";
-    return JSON.parse(txt.replace(/```json|```/g, "").trim());
-  } catch { return null; }
+    if (!txt) { AI_ERR = "The model returned nothing readable."; return null; }
+    try { return JSON.parse(txt.replace(/```json|```/g, "").trim()); }
+    catch { AI_ERR = "The model replied but not as usable data — try a clearer photo."; return null; }
+  } catch {
+    AI_ERR = "Couldn't reach the AI endpoint. Check you're online, and that the site is deployed rather than running locally.";
+    return null;
+  }
 };
 
 const shrink = f => new Promise((ok, no) => {
@@ -183,7 +202,7 @@ const Logo = ({ d, size = 54 }) => d.logo?.startsWith?.("data:")
 const migrate = x => {
   const inv = x.invLocs || [];
   if (!inv.length || typeof inv[0] !== "string") return x;
-  const home = TEAMS[0];
+  const home = DEFAULT_TEAM;
   const mapped = inv.map(n => ({ id: uid(), name: n, team: home }));
   const byName = Object.fromEntries(mapped.map(l => [l.name, l.id]));
   return {
@@ -397,7 +416,7 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
   const medOn = !!d.modules?.med;
   const [mod, setMod] = useState(medOn ? "med" : "inv");
   const [tab, setTab] = useState(medOn ? "dash" : "idash");
-  const [team, setTeam] = useState(user.teams[0]);
+  const [team, setTeam] = useState(user.teams.includes(DEFAULT_TEAM) ? DEFAULT_TEAM : user.teams[0]);
   const [, setOpenTeam] = useState("");
   const canMaster = user.role === "super_admin" || user.teams.length > 1;
   const master = team === ALL;
@@ -502,7 +521,7 @@ function MedInv({ d, up, user, team, say, logIt }) {
       <Field label="Name" value={f.name} onChange={e => sf("name")(e.target.value)} placeholder="e.g. Ibuprofen" />
       <Field label="Dose / Strength" value={f.dose} onChange={e => sf("dose")(e.target.value)} placeholder="e.g. 400mg" />
       <div><label style={LB}>Type</label><select value={f.type} onChange={e => sf("type")(e.target.value)} style={IN}><option>OTC</option><option>POM</option></select></div>
-      <Field label="Quantity *" type="number" value={f.qty} onChange={e => sf("qty")(e.target.value)} placeholder="84" />
+      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={f.qty} onChange={e => sf("qty")(e.target.value)} placeholder="84" />
       <Field label="Expiry" value={f.expiry} onChange={e => sf("expiry")(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={f.expiry ? (expValid(f.expiry) ? `✓ ${fmtD(f.expiry)}` : "⚠ Invalid format") : ""} />
       <Field label="Low Stock Threshold" type="number" value={f.thr} onChange={e => sf("thr")(e.target.value)} />
       <div><label style={LB}>Location *</label><select value={showNl ? "_new" : f.loc} onChange={e => e.target.value === "_new" ? setShowNl(true) : (sf("loc")(e.target.value), setShowNl(false))} style={IN}><option value="">Select…</option>{d.medLocs.map(l => <option key={l}>{l}</option>)}<option value="_new">+ Add new…</option></select>
@@ -521,7 +540,6 @@ function Pills({ d, up, user, team, say, logIt }) {
   const meds = d.meds.filter(m => m.team === team); const med = meds.find(m => m.id === id);
   const scan = async e => {
     const f = e.target.files[0]; if (!f) return; if (!id) return say("Select a medication first", "error");
-    if (!AI_ENDPOINT) return say("AI scanning not configured — enter count manually", "warn");
     setBusy(true); setRes(null);
     const b64 = await shrink(f);
     const r = await askAI('Count pills visible in this blister strip photo. Respond ONLY with JSON no markdown: {"count":0,"desc":"","confidence":"high|medium|low"}', `Expected: ${med.name} ${med.dose || ""}`, b64);
@@ -718,12 +736,11 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
 
   const scan = async e => {
     const f = e.target.files[0]; if (!f) return;
-    if (!AI_ENDPOINT) return say("AI scanning not configured — tick items manually", "warn");
     setBusy(true); setSm("Reading image…");
     const b64 = await shrink(f);
     const known = items.map(i => `${i.name}${i.dose ? " " + i.dose : ""} (qty ${qtyAt(i)})`).join("; ");
     const r = await askAI('Auditing medical stock. Photo may show a package (front/back) OR blister strips. Extract details; if strips visible count remaining pills. Respond ONLY with JSON no markdown: {"name":"","dose":"","batch":"","expiry":"","count":null,"is_strip":false,"confidence":"high|medium|low"}', `Known items here: ${known || "none"}`, b64);
-    if (!r) { say("Could not read image", "error"); setSm(""); setBusy(false); return; }
+    if (!r) { say("Scan failed", "error"); setSm(AI_ERR || "Could not read that image."); setBusy(false); return; }
     const match = items.find(i => r.name && i.name.toLowerCase().includes(String(r.name).toLowerCase().split(" ")[0]));
     if (match) { const q = r.count != null ? r.count : qtyAt(match); setC(p => ({ ...p, [match.id]: { on: true, qty: String(q), note: r.batch ? `Batch ${r.batch}` : "", el: p[match.id]?.el || {} } })); setOpen(match.id); setSm(`✓ ${match.name} — ${r.is_strip ? `counted ${r.count} pills` : "package identified"}${r.batch ? ` · batch ${r.batch}` : ""} — now confirm each element below`); say(`Matched: ${match.name}`); }
     else { setSm(`⚠ Read "${r.name || "unknown"}" — no match at ${here?.name || "this location"}`); say("No match here", "warn"); }
@@ -754,13 +771,11 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
         {here && <div style={{ marginTop: 9 }}><TeamTag t={here.team} /></div>}
         {loc && !items.length && <p style={{ fontSize: 12, color: "#d97706", marginTop: 8 }}>⚠ No items registered here — add via the Add tab first.</p>}
         {loc && last && <p style={{ fontSize: 12, color: T_MUTED, marginTop: 8 }}>Last audit: {fmtDT(last.at)} by {last.by}</p>}
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 13px", fontSize: 12.5, color: "#1e40af", marginTop: 11 }}>Each item is signed off element by element — product name, expiry, amount and batch. An item only counts as audited once all of its elements are confirmed.</div>
         <div style={{ marginTop: 12 }}><Btn t="Start Audit" on={() => { if (!loc) return say("Select a location", "error"); setOn(true); setC({}); }} dis={!loc || !items.length} full /></div></>}</Card>
       : <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div><div style={{ fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>{here?.name}<TeamTag t={here?.team} sm /></div><div style={{ fontSize: 11.5, color: T_MUTED }}>{items.length} registered · {verified.length} fully verified{started.length > verified.length ? ` · ${started.length - verified.length} part-done` : ""}</div></div><Btn t="✓ Finish" on={fin} bg="#16a34a" sm /></div>
         <Card s={{ marginBottom: 11, background: "#f8fafc" }}><input type="file" accept="image/*" capture="environment" ref={fr} onChange={scan} style={{ display: "none" }} />
           <Btn t={busy ? "⏳ Reading photo…" : "📷 Photograph Item or Strip"} on={() => fr.current.click()} dis={busy} full />
-          <div style={{ fontSize: 11.5, color: T_MUTED, marginTop: 7, textAlign: "center" }}>Photograph the package or blister strips to jump to that item</div>
           {sm && <div style={{ marginTop: 9, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 9, padding: "9px 12px", fontSize: 12, color: "#374151" }}>{sm}</div>}</Card>
         {mm.length > 0 && <Card s={{ borderLeft: "4px solid #f59e0b", background: "#fffbeb", marginBottom: 10 }}><div style={{ fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠ {mm.length} mismatch{mm.length !== 1 ? "es" : ""}</div>{mm.map(m => <div key={m.id} style={{ fontSize: 12, color: "#78350f" }}>• {m.name} — expected {qtyAt(m)}, counted {c[m.id]?.qty}</div>)}</Card>}
         {warn && <Card s={{ border: "2px solid #f59e0b", marginBottom: 10 }}><div style={{ fontWeight: 700, marginBottom: 8 }}>Save with mismatches?</div><div style={{ fontSize: 12, color: T_MUTED, marginBottom: 10 }}>Registered quantities will update to counted values and be flagged in history.</div><div style={{ display: "flex", gap: 8 }}><Btn t="Save Anyway" on={() => go(verified)} bg="#d97706" sm /><Btn t="Go Back" on={() => setWarn(false)} bg="#f3f4f6" fg="#374151" sm /></div></Card>}
@@ -818,19 +833,21 @@ function AuditShot({ onPick }) {
 function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const cats = catsOf(d);
   const [sel, setSel] = useState([]); const [filt, setFilt] = useState("All"); const [show, setShow] = useState(false);
-  const [tgt, setTgt] = useState(master ? "" : team);
+  const [tgt, setTgt] = useState(master ? "" : team);   // Master must choose; otherwise the team you're viewing
   const [name, setName] = useState(""); const [dose, setDose] = useState(""); const [cat, setCat] = useState("");
   const [catBusy, setCatBusy] = useState(false); const [catAuto, setCatAuto] = useState(false); const [filled, setFilled] = useState("");
   const [qty, setQty] = useState(""); const [sameAll, setSameAll] = useState(null);
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const scanRef = useRef();
+  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const [scanRows, setScanRows] = useState([]); const scanRef = useRef();
   const [newCat, setNewCat] = useState(""); const [showNewCat, setShowNewCat] = useState(false);
   const [xf, setXf] = useState(null); const [xt, setXt] = useState(""); const [xc, setXc] = useState("");
 
   useEffect(() => { if (!master) setTgt(team); }, [team, master]);
 
+  const scOK = k => scanRows.find(x => x.k === k)?.ok;
+  const Tick = () => <span style={{ color: "#16a34a", fontWeight: 800, marginLeft: 5 }}>✓</span>;
   const isMed = cat === "Medications"; const totalQty = +qty || 0;
   const allocated = Object.values(locQty).reduce((s, n) => s + n, 0);
   const remaining = Math.max(0, totalQty - allocated);
@@ -856,10 +873,9 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   };
   const lookupDoses = async () => {
     if (!name.trim()) return say("Enter a medication name first", "error");
-    if (!AI_ENDPOINT) return say("BNF lookup not configured — enter dose manually", "warn");
     setDl2(true); setDoses([]);
     const r = await askAI('UK BNF assistant. List licensed UK strengths. Respond ONLY with JSON no markdown: {"doses":["400mg tablets"]}', `Medication: ${name}`);
-    if (r?.doses?.length) { setDoses(r.doses); say(`${r.doses.length} BNF strengths found`); } else say("None found — enter manually", "warn");
+    if (r?.doses?.length) { setDoses(r.doses); say(`${r.doses.length} BNF strengths found`); } else say(AI_ERR || "None found — enter manually", "warn");
     setDl2(false);
   };
   const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false);
@@ -872,7 +888,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
     setPics(p => [...p, ...add]); setPicBusy(false);
   };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
 
   const addCat = () => {
     const t = newCat.trim();
@@ -884,7 +900,6 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   };
 
   const scanFill = async files => {
-    if (!AI_ENDPOINT) return say("Scanning needs the AI endpoint — see AI SETUP at the foot of App.jsx", "warn");
     setScanBusy(true); setScanMsg("");
     const imgs = [];
     for (const f of Array.from(files).slice(0, 4)) { try { imgs.push(await shrink(f)); } catch {} }
@@ -895,29 +910,34 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
       imgs);
     setScanBusy(false);
-    if (!r) return say("Could not read that — fill the fields in manually", "error");
-    const got = [], kept = [], missed = [];
+    if (!r) { setScanRows([]); setScanMsg(AI_ERR || "Could not read that — fill the fields in manually."); return say("Scan failed — see the note above", "error"); }
+    setScanMsg("");
     const rd = v => (v == null ? "" : String(v).trim());
-    if (rd(r.name)) { if (name.trim()) kept.push("name"); else { onName(rd(r.name)); got.push(`name (${rd(r.name)})`); } } else missed.push("name");
-    if (rd(r.dose)) { if (!dose) { setDose(rd(r.dose)); got.push(`dose (${rd(r.dose)})`); } else kept.push("dose"); }
+    const rows = [];
+    const push = (k, label, value, ok, note) => rows.push({ k, label, value, ok, note });
+
+    if (rd(r.name)) { if (!name.trim()) onName(rd(r.name)); push("name", "Product name", rd(r.name), true, name.trim() ? "kept what you typed" : ""); }
+    else push("name", "Product name", "", false);
+
+    if (rd(r.dose)) { if (!dose) setDose(rd(r.dose)); push("dose", "Dose / strength", rd(r.dose), true, dose ? "kept what you typed" : ""); }
+
     if (rd(r.expiry)) {
-      if (!expValid(rd(r.expiry))) missed.push(`expiry (read "${rd(r.expiry)}" — not a date the app accepts)`);
-      else if (expiry) kept.push("expiry");
-      else { setExpiry(rd(r.expiry)); got.push(`expiry (${fmtD(rd(r.expiry))})`); }
-    } else missed.push("expiry");
-    if (rd(r.batch)) { if (batch) kept.push("batch"); else { setBatch(rd(r.batch)); got.push(`batch (${rd(r.batch)})`); } } else missed.push("batch / lot");
+      if (!expValid(rd(r.expiry))) push("expiry", "Expiry date", rd(r.expiry), false, "not a date the app accepts");
+      else { if (!expiry) setExpiry(rd(r.expiry)); push("expiry", "Expiry date", fmtD(rd(r.expiry)), true, expiry ? "kept what you typed" : ""); }
+    } else push("expiry", "Expiry date", "", false);
+
     const count = r.remaining ?? r.total;
     if (count != null && !isNaN(+count)) {
-      if (qty) kept.push("quantity");
-      else { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); got.push(`quantity (${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""})`); }
-    } else missed.push("quantity");
-    setScanMsg([
-      got.length ? `Filled in: ${got.join(", ")}.` : "Nothing could be filled in from that.",
-      kept.length ? `Left alone because you'd already typed them: ${kept.join(", ")}.` : "",
-      missed.length ? `Couldn't read: ${missed.join(", ")} — add by hand.` : "",
-      "Check every field against the packaging before saving.",
-    ].filter(Boolean).join(" "));
-    if (got.length) say(`${got.length} field${got.length !== 1 ? "s" : ""} filled in`);
+      if (!qty) { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); }
+      push("qty", "Amount / strip count", `${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""}`, true, qty ? "kept what you typed" : "");
+    } else push("qty", "Amount / strip count", "", false);
+
+    if (rd(r.batch)) { if (!batch) setBatch(rd(r.batch)); push("batch", "Batch / lot number", rd(r.batch), true, batch ? "kept what you typed" : ""); }
+    else push("batch", "Batch / lot number", "", false, "may not be printed on this item");
+
+    setScanRows(rows);
+    const okN = rows.filter(x => x.ok).length;
+    say(okN === rows.length ? "All fields read" : `${okN} of ${rows.length} fields read`);
   };
 
   const add = () => {
@@ -960,24 +980,39 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       {master && <div><label style={LB}>Team <span style={{ color: "#ef4444" }}>*</span></label>
         <select value={tgt} onChange={e => { setTgt(e.target.value); setLocQty({}); }} style={{ ...IN, background: tgt ? teamCol(tgt).bg : "#fff", color: tgt ? teamCol(tgt).fg : "#000", fontWeight: 700 }}>
           <option value="">Choose a team…</option>{TEAMS.map(t => <option key={t} value={t}>{t}</option>)}</select>
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: 5 }}>Stock belongs to one team. In Master view you have to say which.</div></div>}
+</div>}
 
       <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: "13px 14px" }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#1e40af" }}>Scan to fill</div>
-        <div style={{ fontSize: 13.5, color: "#1e40af", marginTop: 4, marginBottom: 10, lineHeight: 1.45 }}>
-          Photograph the packaging, the printed expiry, the strips and the batch number — front and back, up to four shots at once. Whatever is legible drops into the fields below. These shots are read and discarded, not stored.
-        </div>
+        <div style={{ fontSize: 13, color: "#1e40af", marginTop: 3, marginBottom: 10 }}>Up to four shots. Read and discarded, never stored.</div>
         <input type="file" accept="image/*" capture="environment" multiple ref={scanRef} style={{ display: "none" }}
           onChange={e => { if (e.target.files?.length) scanFill(e.target.files); e.target.value = ""; }} />
-        <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy || !AI_ENDPOINT} full />
-        {!AI_ENDPOINT && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 9, lineHeight: 1.45 }}>Scanning is switched off until AI_ENDPOINT is set — see AI SETUP at the foot of this file. Fill the fields in by hand meanwhile.</div>}
-        {scanMsg && <div style={{ marginTop: 10, background: "#fff", border: "1px solid #bfdbfe", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#1f2937", lineHeight: 1.5 }}>{scanMsg}</div>}
+        <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy} full />
+        {scanMsg && <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde047", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#92400e", lineHeight: 1.5 }}>{scanMsg}</div>}
+        {scanRows.length > 0 && (() => {
+          const okN = scanRows.filter(x => x.ok).length; const allOk = okN === scanRows.length;
+          return (<div style={{ marginTop: 10, background: "#fff", border: `1.5px solid ${allOk ? "#86efac" : "#fcd34d"}`, borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: allOk ? "#f0fdf4" : "#fffbeb", borderBottom: "1px solid #e2e8f0" }}>
+              <span style={{ width: 22, height: 22, borderRadius: 99, background: allOk ? "#16a34a" : "#d97706", color: "#fff", fontSize: 13, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{allOk ? "✓" : "!"}</span>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: allOk ? "#166534" : "#92400e" }}>{allOk ? "Everything read — check it against the pack" : `${okN} of ${scanRows.length} read — fill the rest in below`}</div>
+            </div>
+            {scanRows.map(x => (
+              <div key={x.k} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "9px 12px", borderTop: "1px solid #f1f5f9" }}>
+                <span style={{ width: 19, height: 19, borderRadius: 99, background: x.ok ? "#16a34a" : "#fde68a", color: x.ok ? "#fff" : "#92400e", fontSize: 11.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>{x.ok ? "✓" : "–"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11.5, color: T_MUTED, fontWeight: 600 }}>{x.label}</div>
+                  <div style={{ fontSize: 14.5, fontWeight: 600, color: x.ok ? "#0f172a" : "#92400e", wordBreak: "break-word" }}>{x.ok ? x.value : "Not readable — type it in"}</div>
+                  {x.note && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 1 }}>{x.note}</div>}
+                </div>
+              </div>))}
+          </div>);
+        })()}
       </div>
 
-      <div><label style={LB}>Item Name</label>
+      <div><label style={LB}>Item Name{scOK("name") && <Tick />}</label>
         <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={IN} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
         <datalist id="prioritems">{prior.map(p => <option key={p.id} value={p.name}>{catOf(p.cat, cats).label}</option>)}</datalist>
-        <div style={{ fontSize: 13, color: filled ? "#16a34a" : T_MUTED, marginTop: 5 }}>{filled ? "✓ Matched a previous entry — section and dose filled in" : prior.length ? `Suggestions from ${prior.length} item${prior.length !== 1 ? "s" : ""} already registered` : "First item — no suggestions yet"}</div></div>
+</div>
 
       <div><label style={LB}>Section {catBusy && <span style={{ color: "#1e3a8a", fontSize: 11 }}>· suggesting…</span>}{catAuto && !catBusy && <span style={{ color: "#16a34a", fontSize: 11 }}>· suggested</span>}</label>
         <select value={showNewCat ? "_new" : cat}
@@ -989,21 +1024,21 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
         {showNewCat && <div style={{ display: "flex", gap: 7, marginTop: 8 }}>
           <input value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key === "Enter" && addCat()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK kit" autoFocus />
           <Btn t="✓" on={addCat} sm /><Btn t="✕" on={() => { setShowNewCat(false); setNewCat(""); }} bg="#f3f4f6" fg="#374151" sm /></div>}
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: 5 }}>Optional. Leave it blank and the item files under Uncategorised — you can set it later from the → button.</div></div>
+</div>
 
       {isMed && <div><label style={LB}>Dose / Strength</label><div style={{ display: "flex", gap: 7 }}>
         {doses.length ? <select value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }}><option value="">Select strength…</option>{doses.map(x => <option key={x}>{x}</option>)}</select> : <input value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="e.g. 400mg" />}
         <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm /></div></div>}
 
-      <Field label="Quantity *" type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" hint="This is the maximum you can spread across locations below" />
+      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" />
       {totalQty > 1 && <div style={{ background: "#f8fafc", borderRadius: 11, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 9 }}>You've entered {totalQty} units. Do they all share the same expiry and batch/lot number?</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => { setSameAll(true); setVariants([]); }} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `2px solid ${sameAll === true ? "#16a34a" : "#e5e7eb"}`, background: sameAll === true ? "#f0fdf4" : "#fff", fontWeight: 600, fontSize: 13, color: sameAll === true ? "#166534" : "#374151", cursor: "pointer" }}>Yes — all identical</button>
           <button onClick={() => { setSameAll(false); setVariantCount(2); }} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `2px solid ${sameAll === false ? "#d97706" : "#e5e7eb"}`, background: sameAll === false ? "#fffbeb" : "#fff", fontWeight: 600, fontSize: 13, color: sameAll === false ? "#92400e" : "#374151", cursor: "pointer" }}>No — they differ</button></div></div>}
       {(totalQty <= 1 || sameAll === true) && <>
-        <Field label="Expiry" value={expiry} onChange={e => setExpiry(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={expiry ? (expValid(expiry) ? `✓ ${fmtD(expiry)} · ${dLeft(expiry)} days` : "⚠ Use MM/YYYY or DD/MM/YYYY") : "Month & year alone is fine"} />
-        <Field label="Batch / Lot No." value={batch} onChange={e => setBatch(e.target.value)} placeholder="Optional" /></>}
+        <Field label={<>Expiry{scOK("expiry") && <Tick />}</>} value={expiry} onChange={e => setExpiry(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={expiry && !expValid(expiry) ? "⚠ Use MM/YYYY or DD/MM/YYYY" : ""} />
+        <Field label={<>Batch / Lot No.{scOK("batch") && <Tick />}</>} value={batch} onChange={e => setBatch(e.target.value)} placeholder="Optional" /></>}
       {sameAll === false && <div style={{ background: "#fffbeb", borderRadius: 11, padding: "12px 14px", border: "1px solid #fde047" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>Batch details ({variantTotal}/{totalQty})</div>
@@ -1032,7 +1067,6 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
                 </div></div>); })}</div></>}</div>
 
       <div><label style={LB}>Photos</label>
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: -3, marginBottom: 9 }}>One shot showing the name, expiry, amount remaining and batch number is usually enough — add more only where something is unreadable or printed elsewhere on the pack. These are the evidence shown at audit.</div>
         <PhotoBlock shots={pics} busy={picBusy} onAdd={addPics} onDel={id => setPics(p => p.filter(s => s.id !== id))} />
         {pics.length > 0 && <div style={{ fontSize: 12, color: "#16a34a", marginTop: 7, fontWeight: 600 }}>{pics.length} photo{pics.length !== 1 ? "s" : ""} attached</div>}</div>
 
@@ -1093,7 +1127,7 @@ function Sections({ d, up, say }) {
   const rm = k => { up(x => ({ ...x, cats: catsOf(x).filter(c => c.k !== k) })); setCf(null); say("Section removed"); };
   return (<div><H2 t="Sections" />
     <Card s={{ marginBottom: 13 }}><div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK kit" /><Btn t="Add" on={add} sm /></div>
-      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>Sections are optional and shared across all teams — they group items on the dashboard, in the register and at audit. You can also add one straight from the Section dropdown while adding an item. A section holding items can't be removed until you move those items out.</div></Card>
+</Card>
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cats.map(c => { const n2 = count(c.k); return <Card key={c.k} s={{ padding: "11px 14px", borderLeft: `4px solid ${c.fg}` }}>
       {cf === c.k ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>Remove "{c.label}"?</span><div style={{ display: "flex", gap: 7 }}><Btn t="Remove" on={() => rm(c.k)} bg="#dc2626" sm /><Btn t="Cancel" on={() => setCf(null)} bg="#f3f4f6" fg="#374151" sm /></div></div>
         : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1178,7 +1212,7 @@ function Locs({ d, up, team, master, say }) {
         <select value={nt} onChange={e => setNt(e.target.value)} style={{ ...IN, background: nt ? teamCol(nt).bg : "#fff", color: nt ? teamCol(nt).fg : "#000", fontWeight: 700 }}>
           <option value="">Choose a team…</option>{TEAMS.map(t => <option key={t} value={t}>{t}</option>)}</select></div>}
       <div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Treatment room cabinet" /><Btn t="Add" on={add} sm /></div>
-      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>Locations belong to one team, and each team only sees its own. Two teams can use the same name — a "Treatment room" for the men's and one for the women's stay separate.</div></Card>
+</Card>
     {!shown.length && <Empty t={master ? "No locations for any team yet" : `No locations for ${team} yet — add your first above`} />}
     {(master ? TEAMS : [team]).map(t => { const ls = shown.filter(l => l.team === t); if (!ls.length) return null; const c = teamCol(t); return (
       <div key={t} style={{ marginBottom: 15 }}>
