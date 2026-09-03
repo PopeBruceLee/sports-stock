@@ -189,7 +189,7 @@ const Tag = ({ t, bg = "#e5e7eb", fg = "#1f2937" }) => <span style={{ fontSize: 
 const Empty = ({ t }) => <div style={{ textAlign: "center", padding: "40px 0", color: "#4b5563", fontSize: 16 }}>{t}</div>;
 const Dot = ({ n }) => n > 0 ? <span style={{ background: "#dc2626", color: "#fff", borderRadius: 99, fontSize: 12, fontWeight: 700, padding: "2px 7px", marginLeft: 5 }}>{n}</span> : null;
 const Btn = ({ t, on, bg = "#1e3a8a", fg = "#fff", full, sm, dis }) => <button onClick={dis ? undefined : on} style={{ padding: sm ? "10px 16px" : "14px 20px", background: bg, color: fg, border: "none", borderRadius: 11, fontSize: sm ? 15 : 17, fontWeight: 700, cursor: dis ? "default" : "pointer", opacity: dis ? .45 : 1, width: full ? "100%" : undefined, minHeight: sm ? 40 : 48 }}>{t}</button>;
-const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13.5, color: T_MUTED, marginTop: 5 }}>{hint}</div>}</div>;
+const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13, color: "#b45309", marginTop: 5, fontWeight: 600 }}>{hint}</div>}</div>;
 const H1 = ({ t }) => <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 17, color: "#0f172a" }}>{t}</div>;
 const H2 = ({ t }) => <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 13, color: "#0f172a" }}>{t}</div>;
 /* Sports Stock mark — a football reduced to a solid disc with the panel and
@@ -424,13 +424,13 @@ function Register({ d, up, setPage, say, rec }) {
       <div><div style={{ fontSize: 20, fontWeight: 700 }}>Create Account</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 3 }}>Step 1 of {isFirst ? 2 : 3}</div></div>
       {isFirst && <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "10px 13px", fontSize: 12, color: "#6d28d9" }}><b>You're the first user</b> — created as Super Admin with all teams.</div>}
       <Field label="Full Name" value={f.name} onChange={e => sf("name")(e.target.value)} placeholder="Dr Jane Smith" />
-      <Field label="Club Email" type="email" value={f.email} onChange={e => sf("email")(e.target.value)} placeholder={`you@${CLUB_DOMAIN}`} hint={`Must end in @${CLUB_DOMAIN}`} />
+      <Field label="Club Email" type="email" value={f.email} onChange={e => sf("email")(e.target.value)} placeholder={`you@${CLUB_DOMAIN}`} />
       <div><Field label="Password" type="password" value={f.pw} onChange={e => sf("pw")(e.target.value)} placeholder="Choose a strong password" />
         {f.pw && <div style={{ marginTop: 8, background: "#f8fafc", borderRadius: 9, padding: "9px 12px" }}>{pw.checks.map(c => <div key={c.t} style={{ fontSize: 11.5, color: c.ok ? "#16a34a" : T_FAINT, marginBottom: 2 }}>{c.ok ? "✓" : "○"} {c.t}</div>)}</div>}</div>
       <div><Field label="Confirm Password" type="password" value={f.pw2} onChange={e => sf("pw2")(e.target.value)} placeholder="Re-enter password" />
         {f.pw2 && <div style={{ fontSize: 11.5, marginTop: 5, color: f.pw === f.pw2 ? "#16a34a" : "#dc2626" }}>{f.pw === f.pw2 ? "✓ Passwords match" : "✕ Passwords do not match"}</div>}</div>
       {!isFirst && <>
-        <div><label style={LB}>Requested Role</label><select value={f.role} onChange={e => sf("role")(e.target.value)} style={IN}>{["doctor", "physiotherapist", "sports_therapist"].map(k => <option key={k} value={k}>{ROLES[k]}</option>)}</select><div style={{ fontSize: 11, color: T_FAINT, marginTop: 4 }}>An admin will confirm or change this</div></div>
+        <div><label style={LB}>Requested Role</label><select value={f.role} onChange={e => sf("role")(e.target.value)} style={IN}>{["doctor", "physiotherapist", "sports_therapist"].map(k => <option key={k} value={k}>{ROLES[k]}</option>)}</select></div>
         <div><label style={LB}>Teams</label>{TEAMS.map(x => <label key={x} style={{ display: "flex", alignItems: "center", gap: 11, fontSize: 15, marginBottom: 9, cursor: "pointer" }}><input type="checkbox" checked={f.teams.includes(x)} onChange={() => tog(x)} style={{ width: 19, height: 19, accentColor: "#1e3a8a" }} />{x}</label>)}</div></>}
       <Btn t="Continue →" on={step1} full />
     </div></Card></Wrap>);
@@ -548,7 +548,7 @@ function MedInv({ d, up, user, team, say, logIt }) {
       <Field label="Dose / Strength" value={f.dose} onChange={e => sf("dose")(e.target.value)} placeholder="e.g. 400mg" />
       <div><label style={LB}>Type</label><select value={f.type} onChange={e => sf("type")(e.target.value)} style={IN}><option>OTC</option><option>POM</option></select></div>
       <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={f.qty} onChange={e => sf("qty")(e.target.value)} placeholder="84" />
-      <Field label="Expiry" value={f.expiry} onChange={e => sf("expiry")(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={f.expiry ? (expValid(f.expiry) ? `✓ ${fmtD(f.expiry)}` : "⚠ Invalid format") : ""} />
+      <Field label="Expiry" value={f.expiry} onChange={e => sf("expiry")(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={f.expiry && !expValid(f.expiry) ? "⚠ Use MM/YYYY or DD/MM/YYYY" : ""} />
       <Field label="Low Stock Threshold" type="number" value={f.thr} onChange={e => sf("thr")(e.target.value)} />
       <div><label style={LB}>Location *</label><select value={showNl ? "_new" : f.loc} onChange={e => e.target.value === "_new" ? setShowNl(true) : (sf("loc")(e.target.value), setShowNl(false))} style={IN}><option value="">Select…</option>{d.medLocs.map(l => <option key={l}>{l}</option>)}<option value="_new">+ Add new…</option></select>
         {showNl && <div style={{ display: "flex", gap: 7, marginTop: 8 }}><input value={nl} onChange={e => setNl(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="New location" autoFocus /><Btn t="✓" on={() => { if (nl.trim()) { up(x => ({ ...x, medLocs: [...x.medLocs, nl.trim()] })); sf("loc")(nl.trim()); setNl(""); setShowNl(false); } }} sm /></div>}
@@ -580,7 +580,6 @@ function Pills({ d, up, user, team, say, logIt }) {
     say(`Updated — new total: ${nq}`); setN(""); setRes(null);
   };
   return (<div><H1 t="Pill Count" />
-    <p style={{ fontSize: 13, color: T_MUTED, marginBottom: 14 }}>Photograph blister strips for an exact count, or enter manually.</p>
     <Card s={{ marginBottom: 12 }}><H2 t="1. Select Medication" /><select value={id} onChange={e => { setId(e.target.value); setRes(null); setN(""); }} style={IN}><option value="">Select…</option>{meds.map(m => <option key={m.id} value={m.id}>{m.name} {m.dose} — {m.loc} (stock: {m.qty})</option>)}</select>
       {med && <div style={{ marginTop: 10, background: "#f8fafc", borderRadius: 9, padding: "10px 12px", display: "flex", gap: 16 }}><div><div style={{ fontSize: 10, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>Stock</div><div style={{ fontSize: 20, fontWeight: 700, color: "#1e3a8a" }}>{med.qty}</div></div><div><div style={{ fontSize: 10, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>Expiry</div><div style={{ fontSize: 13 }}>{fmtD(med.expiry)}</div></div></div>}</Card>
     {med && <><Card s={{ marginBottom: 12 }}><H2 t="2. Count Mode" /><div style={{ display: "flex", gap: 9 }}>{[["add", "➕ Add", "Add to current total"], ["set", "🔄 Replace", "Full recount"]].map(([v, l, s]) => <button key={v} onClick={() => setMode(v)} style={{ flex: 1, padding: "10px 11px", borderRadius: 11, border: `2px solid ${mode === v ? "#1e3a8a" : "#e5e7eb"}`, background: mode === v ? "#eff6ff" : "#fff", cursor: "pointer", textAlign: "left" }}><div style={{ fontWeight: 600, fontSize: 13, color: mode === v ? "#1e3a8a" : "#374151" }}>{l}</div><div style={{ fontSize: 11, color: T_MUTED }}>{s}</div></button>)}</div></Card>
@@ -719,7 +718,7 @@ function InvDash({ d, team, master }) {
           <div style={{ fontSize: 11, color: T_MUTED, marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>{master && <TeamTag t={x.l.team} sm />}{x.n} item{x.n !== 1 ? "s" : ""}</div></div>
         <div style={{ textAlign: "right" }}><div style={{ fontSize: 12.5, fontWeight: 700, color: od ? "#991b1b" : "#166534" }}>{x.days === null ? "Never audited" : x.days === 0 ? "Today" : `${x.days}d ago`}</div>{x.last && <div style={{ fontSize: 10, color: T_FAINT }}>{x.last.by}</div>}</div>
       </div>); })}</div></Card>}
-    {mmLocs.length > 0 && <Card s={{ marginBottom: 12, borderLeft: "4px solid #f59e0b" }}><H2 t="Discrepancy Watch" /><p style={{ fontSize: 12, color: T_MUTED, margin: "0 0 9px" }}>Locations with recurring count mismatches.</p>{mmLocs.map(x => <div key={x.l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f3f4f6", fontSize: 13 }}><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{master && <TeamTag t={x.l.team} sm />}{x.l.name}</span><b style={{ color: "#d97706" }}>{x.n} mismatch{x.n !== 1 ? "es" : ""}</b></div>)}</Card>}
+    {mmLocs.length > 0 && <Card s={{ marginBottom: 12, borderLeft: "4px solid #f59e0b" }}><H2 t="Discrepancy Watch" />{mmLocs.map(x => <div key={x.l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f3f4f6", fontSize: 13 }}><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{master && <TeamTag t={x.l.team} sm />}{x.l.name}</span><b style={{ color: "#d97706" }}>{x.n} mismatch{x.n !== 1 ? "es" : ""}</b></div>)}</Card>}
     <Card><H2 t="Recent Audits" />{!recent.length && <Empty t="No audits completed yet" />}{recent.map(c => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}><div><div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 7 }}>{master && <TeamTag t={c.team} sm />}{c.loc}</div><div style={{ fontSize: 11, color: T_FAINT, marginTop: 2 }}>{c.by} · {fmtDT(c.at)}</div></div><Tag t={`${c.n} items`} bg="#dbeafe" fg="#1e40af" /></div>)}</Card>
   </div>);
 }
@@ -898,13 +897,19 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     setCatBusy(false);
   };
   const lookupDoses = async () => {
-    if (!name.trim()) return say("Enter a medication name first", "error");
-    setDl2(true); setDoses([]);
-    const r = await askAI('UK BNF assistant. List licensed UK strengths. Respond ONLY with JSON no markdown: {"doses":["400mg tablets"]}', `Medication: ${name}`);
-    if (r?.doses?.length) { setDoses(r.doses); say(`${r.doses.length} BNF strengths found`); } else say(AI_ERR || "None found — enter manually", "warn");
+    if (!name.trim()) return say("Type the product name first", "error");
+    setDl2(true); setDoses([]); setBnf(null);
+    const r = await askAI(
+      'UK BNF assistant. For the product named, give the licensed UK strengths and the usual adult presentation. If it is not a medicine, say so. Respond ONLY with JSON no markdown: {"is_medicine":true,"generic":"","doses":["400mg tablets"],"note":""}',
+      `Product: ${name}`);
     setDl2(false);
+    if (!r) return say(AI_ERR || "BNF lookup failed", "error");
+    if (r.is_medicine === false) { setBnf({ none: true }); return say("Not a medicine — no BNF entry", "warn"); }
+    setBnf({ generic: r.generic || "", note: r.note || "" });
+    if (r.doses?.length) { setDoses(r.doses); if (!cat && cats.some(c => c.k === "Medications")) setCat("Medications"); say(`${r.doses.length} strength${r.doses.length !== 1 ? "s" : ""} found`); }
+    else say("No strengths listed — type it in", "warn");
   };
-  const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false);
+  const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false); const [bnf, setBnf] = useState(null);
 
   const bumpLoc = id => { if (!totalQty) return say("Enter a quantity first", "error"); if (remaining <= 0) return say(`All ${totalQty} already allocated`, "warn"); setLocQty(p => ({ ...p, [id]: (p[id] || 0) + 1 })); };
   const dropLoc = id => setLocQty(p => { const n = { ...p }; const v = (n[id] || 0) - 1; if (v <= 0) delete n[id]; else n[id] = v; return n; });
@@ -914,7 +919,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
     setPics(p => [...p, ...add]); setPicBusy(false);
   };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
 
   const addCat = () => {
     const t = newCat.trim();
@@ -1010,7 +1015,6 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
 
       <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: "13px 14px" }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: "#1e40af" }}>Scan to fill</div>
-        <div style={{ fontSize: 13, color: "#1e40af", marginTop: 3, marginBottom: 10 }}>Up to four shots. Read and discarded, never stored.</div>
         <input type="file" accept="image/*" capture="environment" multiple ref={scanRef} style={{ display: "none" }}
           onChange={e => { if (e.target.files?.length) scanFill(e.target.files); e.target.value = ""; }} />
         <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy} full />
@@ -1036,9 +1040,17 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       </div>
 
       <div><label style={LB}>Item Name{scOK("name") && <Tick />}</label>
-        <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={IN} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
+        <div style={{ display: "flex", gap: 7 }}>
+          <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={{ ...IN, flex: 1 }} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
+          <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm />
+        </div>
         <datalist id="prioritems">{prior.map(p => <option key={p.id} value={p.name}>{catOf(p.cat, cats).label}</option>)}</datalist>
-</div>
+        {bnf && !bnf.none && (bnf.generic || doses.length > 0) && <div style={{ marginTop: 8, border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: "10px 12px" }}>
+          {bnf.generic && <div style={{ fontSize: 13.5, fontWeight: 700, color: "#166534" }}>{bnf.generic}</div>}
+          {doses.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: bnf.generic ? 8 : 0 }}>
+            {doses.map(x => <button key={x} onClick={() => setDose(x)} style={{ padding: "6px 11px", borderRadius: 99, border: `1.5px solid ${dose === x ? "#16a34a" : "#bbf7d0"}`, background: dose === x ? "#16a34a" : "#fff", color: dose === x ? "#fff" : "#166534", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{dose === x ? "✓ " : ""}{x}</button>)}</div>}
+          {bnf.note && <div style={{ fontSize: 12.5, color: "#166534", marginTop: 8 }}>{bnf.note}</div>}
+        </div>}</div>
 
       <div><label style={LB}>Section {catBusy && <span style={{ color: "#1e3a8a", fontSize: 11 }}>· suggesting…</span>}{catAuto && !catBusy && <span style={{ color: "#16a34a", fontSize: 11 }}>· suggested</span>}</label>
         <select value={showNewCat ? "_new" : cat}
@@ -1052,9 +1064,8 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
           <Btn t="✓" on={addCat} sm /><Btn t="✕" on={() => { setShowNewCat(false); setNewCat(""); }} bg="#f3f4f6" fg="#374151" sm /></div>}
 </div>
 
-      {isMed && <div><label style={LB}>Dose / Strength</label><div style={{ display: "flex", gap: 7 }}>
-        {doses.length ? <select value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }}><option value="">Select strength…</option>{doses.map(x => <option key={x}>{x}</option>)}</select> : <input value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="e.g. 400mg" />}
-        <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm /></div></div>}
+      {(isMed || dose || doses.length > 0) && <div><label style={LB}>Dose / Strength{scOK("dose") && <Tick />}</label>
+        <input value={dose} onChange={e => setDose(e.target.value)} style={IN} placeholder="e.g. 400mg" /></div>}
 
       <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" />
       {totalQty > 1 && <div style={{ background: "#f8fafc", borderRadius: 11, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
@@ -1268,7 +1279,6 @@ function Approvals({ d, up, user, say, rec }) {
   };
   const reject = u => { up(x => rec({ ...x, pending: x.pending.filter(p => p.id !== u.id) }, "USER_REJECTED", `${user.name} rejected ${u.name}`, "-")); say("Registration rejected"); };
   return (<div><H1 t="Pending Approvals" />
-    <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "11px 14px", fontSize: 12, color: "#1e40af", marginBottom: 15 }}>{isAdmin ? "Assign each user to one or more teams. They only see data for teams you grant." : "You can approve staff for your own teams only."}</div>
     {!queue.length && <Empty t="No registrations awaiting approval" />}
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>{queue.map(u => {
       const role = edits[u.id]?.role ?? u.requestedRole; const teams = edits[u.id]?.teams ?? u.teams;
@@ -1322,7 +1332,7 @@ function Branding({ d, up, user, say, ph, setPh }) {
   return (<div><H1 t="Club Branding" />
     <Card s={{ marginBottom: 13, borderLeft: `4px solid ${medOn ? "#16a34a" : "#94a3b8"}` }}><H2 t="Modules" />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div><div style={{ fontSize: 15, fontWeight: 600 }}>💊 Medication module</div><div style={{ fontSize: 13, color: T_MUTED, marginTop: 3 }}>Dispensing, pill counts, requests and pharmacist orders. Hidden for everyone while it's off — your data is kept.</div></div>
+        <div><div style={{ fontSize: 15, fontWeight: 600 }}>💊 Medication module</div></div>
         <Btn t={medOn ? "On" : "Off"} on={() => { up(x => ({ ...x, modules: { ...(x.modules || {}), med: !medOn } })); say(medOn ? "Medication module hidden" : "Medication module enabled"); }} bg={medOn ? "#16a34a" : "#94a3b8"} sm /></div></Card>
     <Card s={{ marginBottom: 13 }}><H2 t="Club Logo" />
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
@@ -1383,8 +1393,7 @@ function Backup({ d, up, user, say }) {
     <Card s={{ marginBottom: 13, borderLeft: `4px solid ${sync.enabled ? "#16a34a" : "#94a3b8"}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}><H2 t="SharePoint Sync" /><Tag t={sync.enabled ? "● Connected" : "○ Not connected"} bg={sync.enabled ? "#dcfce7" : "#f3f4f6"} fg={sync.enabled ? "#166534" : "#374151"} /></div>
       {!isAdmin ? <p style={{ fontSize: 13, color: T_MUTED, margin: 0 }}>Only a Super Admin can configure SharePoint sync.</p> : <>
-        <p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 12px", lineHeight: 1.5 }}>Connect a Power Automate flow so every change is written to an Excel file in the club's SharePoint.</p>
-        <label style={LB}>Power Automate HTTP URL</label>
+                <label style={LB}>Power Automate HTTP URL</label>
         <input value={url} onChange={e => setUrl(e.target.value)} style={{ ...IN, fontSize: 13, fontFamily: "monospace" }} placeholder="https://prod-00.uksouth.logic.azure.com/workflows/..." />
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}><Btn t={testing ? "⏳ Testing…" : "🔗 Test & Connect"} on={test} dis={testing} sm />{sync.enabled && <Btn t="Disconnect" on={() => { setSync({ enabled: false }); say("Disconnected"); }} bg="#f3f4f6" fg="#374151" sm />}</div>
         {sync.enabled && <><div style={{ marginTop: 13, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "11px 13px" }}>
@@ -1422,9 +1431,9 @@ function Backup({ d, up, user, say }) {
           <div style={{ marginTop: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 9, padding: "10px 12px", color: "#1e40af" }}><b>Tip for IT:</b> branch on <code>type</code> — route <code>ledger</code> to LedgerTable (append only) and <code>snapshot</code> to SnapshotTable (clear then append).</div>
         </div>}</>}
     </Card>
-    <Card s={{ marginBottom: 13 }}><H2 t="Manual Export" /><p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 12px" }}>Download an offline copy at any time.</p>
+    <Card s={{ marginBottom: 13 }}><H2 t="Manual Export" />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><Btn t="📊 Full Ledger" on={csv} bg="#f3f4f6" fg="#374151" sm /><Btn t="📦 Stock Snapshot" on={snap} bg="#f3f4f6" fg="#374151" sm /></div>
-      <div style={{ fontSize: 12, color: T_MUTED, marginTop: 10 }}>Note: item photos are not included in CSV exports — they stay on this device until you move to a hosted database.</div></Card>
+</Card>
     <Card><H2 t={`Recent Activity (${d.ledger.length} entries)`} />{!recent.length && <Empty t="No activity yet" />}
       {recent.map(l => <div key={l.id} style={{ padding: "9px 0", borderBottom: "1px solid #f3f4f6" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><div style={{ flex: 1 }}><Tag t={l.action} /><div style={{ fontSize: 12, color: "#374151", marginTop: 4 }}>{l.detail}</div><div style={{ fontSize: 10.5, color: T_FAINT, marginTop: 2 }}>{l.user} · {l.role}</div></div><div style={{ fontSize: 10, color: T_FAINT, whiteSpace: "nowrap" }}>{fmtDT(l.ts)}</div></div></div>)}</Card>
   </div>);
