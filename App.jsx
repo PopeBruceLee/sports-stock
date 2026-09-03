@@ -181,6 +181,14 @@ const toDataURL = f => new Promise((ok, no) => {
   r.onerror = no; r.readAsDataURL(f);
 });
 
+/* Medication counts are per tablet/capsule, not per box. A pack's total, what's
+   been used out of it, and what's left. */
+const medLine = i => {
+  if (!i.unit || !i.qty) return "";
+  const total = +i.qty, rem = i.remaining == null ? total : +i.remaining;
+  return `${total} ${i.unit} in box · ${Math.max(0, total - rem)} ${i.unit} dispensed · ${rem} ${i.unit} remaining`;
+};
+
 /* ── STYLE PRIMITIVES ─────────────────────────────────────── */
 const IN = { width: "100%", padding: "13px 14px", border: "1.5px solid #94a3b8", borderRadius: 11, fontSize: 17, fontWeight: 500, boxSizing: "border-box", background: "#fff", fontFamily: "inherit", outline: "none", color: "#000", WebkitTextFillColor: "#000", opacity: 1 };
 const LB = { display: "block", fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 7 };
@@ -786,7 +794,7 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
     say(`Audit saved — ${done.length} items`); setOn(false); setC({}); setLoc(""); setWarn(false); setSm(""); setOpen(null);
   };
 
-  const valueOf = (i, k) => k === "name" ? `${i.name}${i.dose ? " " + i.dose : ""}` : k === "expiry" ? fmtD(i.expiry) : k === "batch" ? (i.batch || "—") : `Registered ${qtyAt(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty}` : ""}`;
+  const valueOf = (i, k) => k === "name" ? `${i.name}${i.dose ? " " + i.dose : ""}` : k === "expiry" ? fmtD(i.expiry) : k === "batch" ? (i.batch || "—") : (i.unit ? `${medLine(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty} ${i.unit}` : ""}` : `Registered ${qtyAt(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty}` : ""}`);
 
   return (<div><H1 t="Stock Audit" />
     {!on ? <Card><H2 t="Start New Audit" /><label style={LB}>Location</label>
@@ -862,6 +870,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const [name, setName] = useState(""); const [dose, setDose] = useState(""); const [cat, setCat] = useState("");
   const [catBusy, setCatBusy] = useState(false); const [catAuto, setCatAuto] = useState(false); const [filled, setFilled] = useState("");
   const [qty, setQty] = useState(""); const [sameAll, setSameAll] = useState(null);
+  const [unit, setUnit] = useState(""); const [remain, setRemain] = useState("");
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
@@ -873,7 +882,9 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
 
   const scOK = k => scanRows.find(x => x.k === k)?.ok;
   const Tick = () => <span style={{ color: "#16a34a", fontWeight: 800, marginLeft: 5 }}>✓</span>;
-  const isMed = cat === "Medications"; const totalQty = +qty || 0;
+  const isMed = cat === "Medications" || !!unit; const totalQty = +qty || 0;
+  const remQty = remain === "" ? totalQty : Math.min(+remain || 0, totalQty);
+  const dispQty = Math.max(0, totalQty - remQty);
   const allocated = Object.values(locQty).reduce((s, n) => s + n, 0);
   const remaining = Math.max(0, totalQty - allocated);
   const variantTotal = variants.reduce((s, v) => s + (+v.qty || 0), 0);
@@ -930,7 +941,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     const imgs = shots.slice(-4).map(x => x.data.split(",")[1]);
     const known = prior.slice(0, 40).map(p => p.name).join("; ");
     const r = await askAI(
-      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
+      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. For a medicine, "unit" is what the pack is counted in — tablets, capsules, sachets or ml — and "total" is how many the FULL pack holds (read it off the carton, e.g. "16 tablets"). If blister strips are visible, count the units still in the blisters and put that in "remaining"; count empty popped bubbles as used. If no strips are visible, leave remaining null. For non-medicines, leave unit null and put the number of units in total. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","unit":null,"total":null,"remaining":null}',
       `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
       imgs);
     setScanBusy(false);
@@ -950,10 +961,18 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       else { if (!expiry) setExpiry(rd(r.expiry)); push("expiry", "Expiry date", fmtD(rd(r.expiry)), true, expiry ? "kept what you typed" : ""); }
     } else push("expiry", "Expiry date", "", false);
 
-    const count = r.remaining ?? r.total;
-    if (count != null && !isNaN(+count)) {
-      if (!qty) { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); }
-      push("qty", "Amount / strip count", `${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""}`, true, qty ? "kept what you typed" : "");
+    const u = ["tablets", "capsules", "sachets", "ml"].includes(rd(r.unit)) ? rd(r.unit) : "";
+    if (u && !unit) setUnit(u);
+    const tot = r.total != null && !isNaN(+r.total) ? +r.total : null;
+    const rem = r.remaining != null && !isNaN(+r.remaining) ? +r.remaining : null;
+    if (tot != null || rem != null) {
+      const t = tot ?? rem, x = u || unit;
+      if (!qty) { setQty(String(t)); setSameAll(null); setVariants([]); setLocQty({}); }
+      if (x && rem != null && !remain) setRemain(String(rem));
+      push("qty", x ? "Count" : "Amount",
+        x && rem != null && tot != null ? `${tot} ${x} in box · ${Math.max(0, tot - rem)} ${x} dispensed · ${rem} ${x} remaining`
+          : x ? `${t} ${x}${rem != null ? ` remaining` : " in box"}` : `${t}`,
+        true, qty ? "kept what you typed" : (x && rem == null ? "strips not visible — remaining assumed full" : ""));
     } else push("qty", "Amount / strip count", "", false);
 
     if (rd(r.batch)) { if (!batch) setBatch(rd(r.batch)); push("batch", "Batch / lot number", rd(r.batch), true, batch ? "kept what you typed" : ""); }
@@ -964,7 +983,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     say(okN === rows.length ? "All fields read from the photo" : `${okN} of ${rows.length} fields read`);
   };
 
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setUnit(""); setRemain(""); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
 
   const addCat = () => {
     const t = newCat.trim();
@@ -978,10 +997,12 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const add = () => {
     if (!tgt) return say("Choose which team this belongs to", "error");
     if (!name.trim()) return say("Item name required", "error");
-    if (!totalQty) return say("Enter the quantity being added", "error");
-    const locs = Object.entries(locQty).filter(([, n]) => n > 0).map(([id, n]) => ({ id, qty: n }));
-    if (!locs.length) return say("Assign the item to at least one location", "error");
-    if (allocated !== totalQty) return say(`${remaining} of ${totalQty} still to allocate`, "error");
+    if (!totalQty) return say(isMed ? "Enter how many are in a full box" : "Enter the quantity being added", "error");
+    if (isMed && !unit) return say("Say whether these are tablets, capsules, sachets or ml", "error");
+    const picked = Object.entries(locQty).filter(([, n]) => n > 0);
+    if (!picked.length) return say(isMed ? "Choose where this is kept" : "Assign the item to at least one location", "error");
+    const locs = isMed ? [{ id: picked[0][0], qty: remQty }] : picked.map(([id, n]) => ({ id, qty: n }));
+    if (!isMed && allocated !== totalQty) return say(`${remaining} of ${totalQty} still to allocate`, "error");
     const pg = pics.length ? uid() : null;
     if (pg) setPh(p => ({ ...p, [pg]: pics }));
     const locTxt = locs.map(l => locNm(d, l.id)).join(", ");
@@ -994,7 +1015,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       say(`${variants.length} batches added to ${teamShort(tgt)}`); reset(); return;
     }
     if (!expValid(expiry)) return say("Enter expiry as MM/YYYY or DD/MM/YYYY", "error");
-    up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, locs, pg, added: nowISO(), checked: nowISO() }] }));
+    up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, unit: isMed ? unit : "", remaining: isMed ? remQty : null, locs, pg, added: nowISO(), checked: nowISO() }] }));
     const a = alertOf(expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry, lvl: a.label, done: false }] }));
     say(`Added to ${locs.length} location${locs.length !== 1 ? "s" : ""}${pics.length ? ` with ${pics.length} photo${pics.length !== 1 ? "s" : ""}` : ""}`); reset();
   };
@@ -1070,7 +1091,20 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       {(isMed || dose || doses.length > 0) && <div><label style={LB}>Dose / Strength{scOK("dose") && <Tick />}</label>
         <input value={dose} onChange={e => setDose(e.target.value)} style={IN} placeholder="e.g. 400mg" /></div>}
 
-      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" />
+      <div><label style={LB}>{isMed ? "Tablets / capsules in a full box" : "Quantity"} <span style={{ color: "#ef4444" }}>*</span>{scOK("qty") && <Tick />}</label>
+        <input type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} style={IN} placeholder={isMed ? "e.g. 16" : "How many units are you adding?"} /></div>
+      {isMed && <>
+        <div><label style={LB}>Counted as</label>
+          <div style={{ display: "flex", gap: 8 }}>{["tablets", "capsules", "sachets", "ml"].map(u => (
+            <button key={u} onClick={() => setUnit(u)} style={{ flex: 1, padding: "10px 6px", borderRadius: 10, border: `2px solid ${unit === u ? "#1e3a8a" : "#e2e8f0"}`, background: unit === u ? "#eff6ff" : "#fff", color: unit === u ? "#1e3a8a" : "#374151", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{u}</button>))}</div></div>
+        <div><label style={LB}>Remaining now{scOK("qty") && <Tick />}</label>
+          <input type="number" value={remain} onChange={e => setRemain(e.target.value)} style={IN} placeholder={`Leave blank if the box is full (${totalQty || "—"})`} /></div>
+        {totalQty > 0 && unit && <div style={{ display: "flex", border: "1px solid #e2e8f0", borderRadius: 11, overflow: "hidden" }}>
+          {[[totalQty, `${unit} in box`, "#0f172a"], [dispQty, `${unit} dispensed`, "#b45309"], [remQty, `${unit} remaining`, "#166534"]].map(([v, l, c], k) => (
+            <div key={l} style={{ flex: 1, padding: "11px 8px", textAlign: "center", borderLeft: k ? "1px solid #e2e8f0" : "none", background: k === 2 ? "#f0fdf4" : "#fff" }}>
+              <div style={{ fontSize: 21, fontWeight: 800, color: c }}>{v}</div>
+              <div style={{ fontSize: 11.5, color: T_MUTED, fontWeight: 600 }}>{l}</div></div>))}</div>}
+      </>}
       {totalQty > 1 && <div style={{ background: "#f8fafc", borderRadius: 11, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 9 }}>You've entered {totalQty} units. Do they all share the same expiry and batch/lot number?</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1094,7 +1128,11 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       <div><label style={LB}>Locations <span style={{ color: "#ef4444" }}>*</span></label>
         {!tgt ? <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: T_MUTED }}>Choose a team above first.</div>
           : !formLocs.length ? <div style={{ background: "#fffbeb", border: "1px solid #fde047", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: "#92400e" }}>{teamShort(tgt)} has no locations yet — add them in the <b>Setup</b> tab, then come back.</div> : <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
+            {isMed ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{formLocs.map(l => { const on = locQty[l.id] > 0; return (
+              <button key={l.id} onClick={() => setLocQty({ [l.id]: totalQty || 1 })} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, border: `1.5px solid ${on ? teamCol(l.team).dot : "#e2e8f0"}`, background: on ? teamCol(l.team).bg : "#fff", borderRadius: 11, padding: "12px 13px", cursor: "pointer", textAlign: "left" }}>
+                <span style={{ fontSize: 15, fontWeight: on ? 700 : 500, color: on ? teamCol(l.team).fg : "#1f2937" }}>📍 {l.name}</span>
+                {on && <span style={{ fontSize: 14, fontWeight: 800, color: teamCol(l.team).fg }}>✓</span>}</button>); })}</div>
+            : <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{allocated} of {totalQty || 0} allocated</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: totalQty === 0 ? T_MUTED : remaining === 0 ? "#166534" : "#d97706" }}>{totalQty === 0 ? "Enter a quantity first" : remaining === 0 ? "✓ All placed" : `${remaining} left to place`}</div></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{formLocs.map(l => { const n = locQty[l.id] || 0; const canAdd = totalQty > 0 && remaining > 0; return (
@@ -1104,7 +1142,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
                   <button onClick={() => dropLoc(l.id)} disabled={!n} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", fontSize: 19, fontWeight: 700, cursor: n ? "pointer" : "default", opacity: n ? 1 : .35 }}>−</button>
                   <div style={{ minWidth: 26, textAlign: "center", fontSize: 17, fontWeight: 700, color: n ? teamCol(l.team).fg : T_FAINT }}>{n}</div>
                   <button onClick={() => bumpLoc(l.id)} disabled={!canAdd} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: canAdd ? "#1e3a8a" : "#fff", color: canAdd ? "#fff" : T_FAINT, fontSize: 19, fontWeight: 700, cursor: canAdd ? "pointer" : "default", opacity: canAdd ? 1 : .4 }}>+</button>
-                </div></div>); })}</div></>}</div>
+                </div></div>); })}</div></>}</>}</div>
 
 
       <Btn t="Save Item" on={add} full />
@@ -1140,7 +1178,8 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
         <Card key={i.id + id} s={{ padding: "10px 13px", borderLeft: `3px solid ${a ? a.br : c.dot}` }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: 13.5 }}>{i.name} {i.dose && <span style={{ color: T_MUTED, fontWeight: 500 }}>{i.dose}</span>}</div>
-            <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={`Qty here: ${here?.qty ?? i.qty}`} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}{shots.length > 0 && <Tag t={`📷 ${shots.length}`} bg="#dcfce7" fg="#166534" />}</div>
+            <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={i.unit ? `${i.remaining ?? i.qty} of ${i.qty} ${i.unit}` : `Qty here: ${here?.qty ?? i.qty}`} bg={i.unit ? "#dcfce7" : "#e5e7eb"} fg={i.unit ? "#166534" : "#1f2937"} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}{shots.length > 0 && <Tag t={`📷 ${shots.length}`} bg="#dcfce7" fg="#166534" />}</div>
+            {i.unit && <div style={{ fontSize: 12, color: T_MUTED, marginTop: 4 }}>{medLine(i)}</div>}
             {(i.locs || []).length > 1 && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 3 }}>Also at: {i.locs.filter(x => x.id !== id).map(x => `${locNm(d, x.id)} (${x.qty})`).join(", ")}</div>}
             {shots.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 7, overflowX: "auto" }}>{shots.slice(0, 6).map(sh => <img key={sh.id} src={sh.data} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 7, border: "1px solid #e2e8f0", flexShrink: 0 }} />)}</div>}</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>{a && <Tag t={`⚠ ${a.label}`} bg={a.bg} fg={a.fg} />}
