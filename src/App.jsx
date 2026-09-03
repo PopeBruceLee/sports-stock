@@ -28,7 +28,7 @@ import { useState, useEffect, useRef } from "react";
 
 /* ── CONFIG ────────────────────────────────────────────────── */
 const CLUB_DOMAIN = "cpfc.co.uk";     // required email domain
-const AI_ENDPOINT = "";               // e.g. "/api/ai" — leave "" to disable AI
+const AI_ENDPOINT = "/api/ai";        // set to "" to switch every AI feature off
 const STORE_KEY   = "sportsstock_v1";
 const PHOTO_KEY   = "sportsstock_v1_photos";
 
@@ -36,11 +36,27 @@ const PHOTO_KEY   = "sportsstock_v1_photos";
 const T_MUTED = "#4b5563";   // secondary text (was #6b7280)
 const T_FAINT = "#64748b";   // tertiary text (was #9ca3af)
 
-const TEAMS = ["Women's First Team", "Men's First Team", "Academy"];
+const TEAMS = ["Men's First Team", "Women's First Team", "Academy"];
+const DEFAULT_TEAM = "Men's First Team";
 const ROLES = { super_admin: "Super Admin", doctor: "Doctor", physiotherapist: "Physiotherapist", sports_therapist: "Sports Therapist" };
 const ROLE_COL = { super_admin: "#7c3aed", doctor: "#1d4ed8", physiotherapist: "#0369a1", sports_therapist: "#0f766e" };
 
-/* No pre-set locations — these are added by you in Locations */
+/* Each team gets its own colour, used wherever teams are mixed together */
+const TEAM_COL = {
+  "Women's First Team": { bg: "#f5f3ff", fg: "#5b21b6", dot: "#7c3aed" },
+  "Men's First Team":   { bg: "#eff6ff", fg: "#1e40af", dot: "#2563eb" },
+  "Academy":            { bg: "#f0fdfa", fg: "#115e59", dot: "#14b8a6" },
+};
+const teamCol = t => TEAM_COL[t] || { bg: "#f1f5f9", fg: "#334155", dot: "#64748b" };
+const teamShort = t => !t ? "—" : t.includes("Women") ? "Women's" : t.includes("Men") ? "Men's" : t;
+const ALL = "__all";   // the Master view
+
+/* Locations are objects: { id, name, team }. Items reference them by id. */
+const locById = (d, id) => (d.invLocs || []).find(l => l.id === id);
+const locNm = (d, id) => locById(d, id)?.name || "Unknown location";
+const locTm = (d, id) => locById(d, id)?.team || "";
+
+/* No pre-set locations — these are added by you in Setup */
 const MED_LOCS = [];
 const INV_LOCS = [];
 
@@ -112,9 +128,12 @@ const pwCheck = p => {
   return { checks: c, valid: c.filter(x => x.ok).length >= 4 && p.length >= 7 };
 };
 
-/* AI helper — returns null if disabled or fails */
+/* AI helper — returns parsed JSON, or null with the reason left in AI_ERR so the
+   screen can say what actually went wrong instead of failing silently. */
+let AI_ERR = "";
 const askAI = async (system, msg, img) => {
-  if (!AI_ENDPOINT) return null;
+  AI_ERR = "";
+  if (!AI_ENDPOINT) { AI_ERR = "AI_ENDPOINT is empty at the top of App.jsx."; return null; }
   try {
     const imgs = Array.isArray(img) ? img : img ? [img] : [];
     const content = imgs.length
@@ -124,10 +143,25 @@ const askAI = async (system, msg, img) => {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 800, system, messages: [{ role: "user", content }] })
     });
+    if (!r.ok) {
+      AI_ERR = r.status === 404
+        ? "No /api/ai on this server. Either the api/ai.js function isn't deployed, or you're on a local npm run dev — Vite doesn't run serverless functions. Use npx vercel dev, or test on the deployed URL."
+        : r.status === 401 || r.status === 403
+          ? "The Anthropic API key was rejected. Check ANTHROPIC_API_KEY in Vercel, and that the account has credit."
+          : r.status === 500
+            ? "The server errored — usually ANTHROPIC_API_KEY missing, or the deployment ran before you added it. Add it, then redeploy."
+            : `The AI endpoint returned ${r.status}.`;
+      return null;
+    }
     const j = await r.json();
     const txt = j.content?.[0]?.text || "";
-    return JSON.parse(txt.replace(/```json|```/g, "").trim());
-  } catch { return null; }
+    if (!txt) { AI_ERR = "The model returned nothing readable."; return null; }
+    try { return JSON.parse(txt.replace(/```json|```/g, "").trim()); }
+    catch { AI_ERR = "The model replied but not as usable data — try a clearer photo."; return null; }
+  } catch {
+    AI_ERR = "Couldn't reach the AI endpoint. Check you're online, and that the site is deployed rather than running locally.";
+    return null;
+  }
 };
 
 const shrink = f => new Promise((ok, no) => {
@@ -155,14 +189,58 @@ const Tag = ({ t, bg = "#e5e7eb", fg = "#1f2937" }) => <span style={{ fontSize: 
 const Empty = ({ t }) => <div style={{ textAlign: "center", padding: "40px 0", color: "#4b5563", fontSize: 16 }}>{t}</div>;
 const Dot = ({ n }) => n > 0 ? <span style={{ background: "#dc2626", color: "#fff", borderRadius: 99, fontSize: 12, fontWeight: 700, padding: "2px 7px", marginLeft: 5 }}>{n}</span> : null;
 const Btn = ({ t, on, bg = "#1e3a8a", fg = "#fff", full, sm, dis }) => <button onClick={dis ? undefined : on} style={{ padding: sm ? "10px 16px" : "14px 20px", background: bg, color: fg, border: "none", borderRadius: 11, fontSize: sm ? 15 : 17, fontWeight: 700, cursor: dis ? "default" : "pointer", opacity: dis ? .45 : 1, width: full ? "100%" : undefined, minHeight: sm ? 40 : 48 }}>{t}</button>;
-const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13.5, color: T_MUTED, marginTop: 5 }}>{hint}</div>}</div>;
+const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13, color: "#b45309", marginTop: 5, fontWeight: 600 }}>{hint}</div>}</div>;
 const H1 = ({ t }) => <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 17, color: "#0f172a" }}>{t}</div>;
 const H2 = ({ t }) => <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 13, color: "#0f172a" }}>{t}</div>;
+/* Sports Stock mark — a football reduced to a solid disc with the panel and
+   seams knocked out. Masked rather than drawn, so the cut-outs stay transparent
+   and it sits on any background. currentColor drives the fill. */
+let markN = 0;
+const Mark = ({ size = 40, style }) => {
+  const id = useRef(`ssm${++markN}`).current;
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} style={{ display: "block", color: "inherit", ...style }} aria-hidden="true">
+      <defs><mask id={id}>
+        <rect width="64" height="64" fill="#000" />
+        <circle cx="32" cy="32" r="30" fill="#fff" />
+        <polygon points="32,21 42.46,28.6 38.47,40.9 25.53,40.9 21.54,28.6" fill="#000" />
+        <g stroke="#000" strokeWidth="5" strokeLinecap="round">
+          <line x1="32" y1="21" x2="32" y2="7" />
+          <line x1="42.46" y1="28.6" x2="55.78" y2="24.27" />
+          <line x1="38.47" y1="40.9" x2="46.69" y2="52.23" />
+          <line x1="25.53" y1="40.9" x2="17.31" y2="52.23" />
+          <line x1="21.54" y1="28.6" x2="8.22" y2="24.27" />
+        </g>
+      </mask></defs>
+      <rect width="64" height="64" fill="currentColor" mask={`url(#${id})`} />
+    </svg>
+  );
+};
+
 const Logo = ({ d, size = 54 }) => d.logo?.startsWith?.("data:")
   ? <img src={d.logo} alt="" style={{ width: size, height: size, borderRadius: size * .27, objectFit: "cover", background: "#fff", border: "1px solid #e5e7eb" }} />
-  : <div style={{ width: size, height: size, background: "#1e3a8a", borderRadius: size * .27, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * .48 }}>{d.logo || "⚽"}</div>;
+  : <div style={{ width: size, height: size, background: "#1e3a8a", borderRadius: size * .27, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * .48, color: "#fff" }}>
+      {(!d.logo || d.logo === "mark" || d.logo === "⚽") ? <Mark size={size * .62} /> : d.logo}</div>;
 
-const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "⚽", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
+/* Older saves stored invLocs as plain strings with no team. Convert them once:
+   every existing location and item is assigned to the first team, and item
+   location references switch from name to id. */
+const migrate = x => {
+  const inv = x.invLocs || [];
+  if (!inv.length || typeof inv[0] !== "string") return x;
+  const home = DEFAULT_TEAM;
+  const mapped = inv.map(n => ({ id: uid(), name: n, team: home }));
+  const byName = Object.fromEntries(mapped.map(l => [l.name, l.id]));
+  return {
+    ...x,
+    invLocs: mapped,
+    items: (x.items || []).map(i => ({ ...i, team: i.team || home, locs: (i.locs || []).map(l => ({ id: byName[l.name] || uid(), qty: l.qty })) })),
+    checks: (x.checks || []).map(c => ({ ...c, locId: byName[c.loc], team: c.team || home })),
+    orders: (x.orders || []).map(o => ({ ...o, team: o.team || home })),
+  };
+};
+
+const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
 
 /* ── PHOTO BLOCK ──────────────────────────────────────────── */
 /* Used when adding an item and again during audit. One or more photos per
@@ -196,7 +274,7 @@ function PhotoBlock({ shots, onAdd, onDel, busy }) {
 export default function App() {
   const [storeErr, setStoreErr] = useState("");
   const [d, setD] = useState(() => {
-    try { const s = localStorage.getItem(STORE_KEY); return s ? { ...BLANK, ...JSON.parse(s) } : BLANK; }
+    try { const s = localStorage.getItem(STORE_KEY); return s ? migrate({ ...BLANK, ...JSON.parse(s) }) : BLANK; }
     catch { return BLANK; }
   });
   /* Photos live in their own key so a full photo store never risks stock data */
@@ -283,10 +361,10 @@ function Login({ d, setUser, setPage, say }) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 380 }}>
-        <div style={{ textAlign: "center", marginBottom: 26 }}>
-          <div style={{ marginBottom: 12 }}><Logo d={d} /></div>
-          <div style={{ fontSize: 11, letterSpacing: 2, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>{d.clubName}</div>
-          <div style={{ fontSize: 25, fontWeight: 700, marginTop: 3 }}>Sports Stock App</div>
+        <div style={{ textAlign: "center", marginBottom: 30 }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><Logo d={d} size={76} /></div>
+          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.6, color: "#0f172a", lineHeight: 1.1 }}>Sports Stock</div>
+          <div style={{ fontSize: 11.5, letterSpacing: 2.2, color: T_FAINT, textTransform: "uppercase", fontWeight: 600, marginTop: 7 }}>{d.clubName}</div>
         </div>
         <Card><div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Club Email" type="email" value={e} onChange={ev => setE(ev.target.value)} placeholder={`you@${CLUB_DOMAIN}`} />
@@ -346,13 +424,13 @@ function Register({ d, up, setPage, say, rec }) {
       <div><div style={{ fontSize: 20, fontWeight: 700 }}>Create Account</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 3 }}>Step 1 of {isFirst ? 2 : 3}</div></div>
       {isFirst && <div style={{ background: "#f5f3ff", border: "1px solid #ddd6fe", borderRadius: 10, padding: "10px 13px", fontSize: 12, color: "#6d28d9" }}><b>You're the first user</b> — created as Super Admin with all teams.</div>}
       <Field label="Full Name" value={f.name} onChange={e => sf("name")(e.target.value)} placeholder="Dr Jane Smith" />
-      <Field label="Club Email" type="email" value={f.email} onChange={e => sf("email")(e.target.value)} placeholder={`you@${CLUB_DOMAIN}`} hint={`Must end in @${CLUB_DOMAIN}`} />
+      <Field label="Club Email" type="email" value={f.email} onChange={e => sf("email")(e.target.value)} placeholder={`you@${CLUB_DOMAIN}`} />
       <div><Field label="Password" type="password" value={f.pw} onChange={e => sf("pw")(e.target.value)} placeholder="Choose a strong password" />
         {f.pw && <div style={{ marginTop: 8, background: "#f8fafc", borderRadius: 9, padding: "9px 12px" }}>{pw.checks.map(c => <div key={c.t} style={{ fontSize: 11.5, color: c.ok ? "#16a34a" : T_FAINT, marginBottom: 2 }}>{c.ok ? "✓" : "○"} {c.t}</div>)}</div>}</div>
       <div><Field label="Confirm Password" type="password" value={f.pw2} onChange={e => sf("pw2")(e.target.value)} placeholder="Re-enter password" />
         {f.pw2 && <div style={{ fontSize: 11.5, marginTop: 5, color: f.pw === f.pw2 ? "#16a34a" : "#dc2626" }}>{f.pw === f.pw2 ? "✓ Passwords match" : "✕ Passwords do not match"}</div>}</div>
       {!isFirst && <>
-        <div><label style={LB}>Requested Role</label><select value={f.role} onChange={e => sf("role")(e.target.value)} style={IN}>{["doctor", "physiotherapist", "sports_therapist"].map(k => <option key={k} value={k}>{ROLES[k]}</option>)}</select><div style={{ fontSize: 11, color: T_FAINT, marginTop: 4 }}>An admin will confirm or change this</div></div>
+        <div><label style={LB}>Requested Role</label><select value={f.role} onChange={e => sf("role")(e.target.value)} style={IN}>{["doctor", "physiotherapist", "sports_therapist"].map(k => <option key={k} value={k}>{ROLES[k]}</option>)}</select></div>
         <div><label style={LB}>Teams</label>{TEAMS.map(x => <label key={x} style={{ display: "flex", alignItems: "center", gap: 11, fontSize: 15, marginBottom: 9, cursor: "pointer" }}><input type="checkbox" checked={f.teams.includes(x)} onChange={() => tog(x)} style={{ width: 19, height: 19, accentColor: "#1e3a8a" }} />{x}</label>)}</div></>}
       <Btn t="Continue →" on={step1} full />
     </div></Card></Wrap>);
@@ -364,7 +442,10 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
   const medOn = !!d.modules?.med;
   const [mod, setMod] = useState(medOn ? "med" : "inv");
   const [tab, setTab] = useState(medOn ? "dash" : "idash");
-  const [team, setTeam] = useState(user.teams[0]);
+  const [team, setTeam] = useState(user.teams.includes(DEFAULT_TEAM) ? DEFAULT_TEAM : user.teams[0]);
+  const [, setOpenTeam] = useState("");
+  const canMaster = user.role === "super_admin" || user.teams.length > 1;
+  const master = team === ALL;
   const isAdmin = user.role === "super_admin"; const isDoc = ["doctor", "super_admin"].includes(user.role);
   const canApprove = isAdmin || user.role === "doctor";
   const pendUsers = canApprove ? d.pending.filter(p => isAdmin || p.teams.some(t => user.teams.includes(t))).length : 0;
@@ -372,15 +453,15 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
   const ordN = d.orders.filter(o => !o.done).length;
 
   // If the medication module is switched off while you're inside it, bounce out
-  useEffect(() => { if (!medOn && mod === "med") { setMod("inv"); setTab("idash"); } }, [medOn, mod]);
+  useEffect(() => { if ((!medOn || master) && mod === "med") { setMod("inv"); setTab("idash"); } }, [medOn, master, mod]);
 
-  const P = { d, up, user, team, say, logIt, rec, ph, setPh };
+  const P = { d, up, user, team, master, say, logIt, rec, ph, setPh };
   const medT = [["dash", "Dashboard"], ["inv", "Inventory"], ["pills", "Pill Count"], ["disp", "Dispense"], ["trend", "Trends"], ...(isDoc ? [["req", "Requests", pend], ["aud", "Audit"], ["cfg", "Settings"]] : [])];
   const invT = [["idash", "Dashboard"], ["chk", "Stock Audit"], ["add", "Add"], ["loc", "Setup"], ["exp", "Alerts", d.items.filter(i => alertOf(i.expiry)).length], ["ord", "Orders", ordN], ["hist", "History"]];
   const admT = [["users", "Approvals", pendUsers], ["team", "Team"], ["brand", "Branding"], ["backup", "Backup"]];
   const tabs = mod === "med" ? medT : mod === "inv" ? invT : admT;
   const sw = m => { setMod(m); setTab(m === "med" ? "dash" : m === "inv" ? "idash" : "users"); };
-  const mods = [...(medOn ? [["med", "💊 Medication", pend]] : []), ["inv", "📦 Inventory", ordN], ...(canApprove ? [["adm", "🔐 Admin", pendUsers]] : [])];
+  const mods = [...(medOn && !master ? [["med", "💊 Medication", pend]] : []), ["inv", "📦 Inventory", ordN], ...(canApprove ? [["adm", "🔐 Admin", pendUsers]] : [])];
 
   return (
     <div>
@@ -388,13 +469,18 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <Logo d={d} size={46} />
-            <div><div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.15, color: "#1e3a8a" }}>{team}</div>
+            <div><div style={{ fontSize: 20, fontWeight: 800, lineHeight: 1.15, color: master ? "#334155" : teamCol(team).fg, display: "flex", alignItems: "center", gap: 7 }}>
+              {!master && <span style={{ width: 10, height: 10, borderRadius: 99, background: teamCol(team).dot, flexShrink: 0 }} />}
+              {master ? "All teams" : team}</div>
               <div style={{ fontSize: 13, color: T_MUTED, marginTop: 2 }}>{user.name} · <span style={{ color: ROLE_COL[user.role], fontWeight: 600 }}>{ROLES[user.role]}</span></div></div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-            {user.teams.length > 1 && <div>
-              <div style={{ fontSize: 10.5, fontWeight: 700, color: T_MUTED, marginBottom: 2 }}>Team</div>
-              <select value={team} onChange={e => setTeam(e.target.value)} style={{ fontSize: 14, fontWeight: 600, color: "#1e3a8a", background: "#eff6ff", border: "1.5px solid #bfdbfe", borderRadius: 9, padding: "8px 10px", maxWidth: 190, minHeight: 40 }}>{user.teams.map(t => <option key={t}>{t}</option>)}</select>
+            {(user.teams.length > 1 || canMaster) && <div>
+              <div style={{ fontSize: 10.5, fontWeight: 700, color: T_MUTED, marginBottom: 2 }}>Viewing</div>
+              <select value={team} onChange={e => { setTeam(e.target.value); setOpenTeam(""); }}
+                style={{ fontSize: 14, fontWeight: 700, color: master ? "#334155" : teamCol(team).fg, background: master ? "#f1f5f9" : teamCol(team).bg, border: `1.5px solid ${master ? "#cbd5e1" : teamCol(team).dot}`, borderRadius: 9, padding: "8px 10px", maxWidth: 200, minHeight: 40 }}>
+                {user.teams.map(t => <option key={t} value={t}>{t}</option>)}
+                {canMaster && <option value={ALL}>★ Master — all teams</option>}</select>
             </div>}
             <button onClick={() => { setUser(null); setPage("login"); }} style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 12px", fontSize: 13, color: T_MUTED, cursor: "pointer", minHeight: 40 }}>Out</button>
           </div>
@@ -461,8 +547,8 @@ function MedInv({ d, up, user, team, say, logIt }) {
       <Field label="Name" value={f.name} onChange={e => sf("name")(e.target.value)} placeholder="e.g. Ibuprofen" />
       <Field label="Dose / Strength" value={f.dose} onChange={e => sf("dose")(e.target.value)} placeholder="e.g. 400mg" />
       <div><label style={LB}>Type</label><select value={f.type} onChange={e => sf("type")(e.target.value)} style={IN}><option>OTC</option><option>POM</option></select></div>
-      <Field label="Quantity *" type="number" value={f.qty} onChange={e => sf("qty")(e.target.value)} placeholder="84" />
-      <Field label="Expiry" value={f.expiry} onChange={e => sf("expiry")(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={f.expiry ? (expValid(f.expiry) ? `✓ ${fmtD(f.expiry)}` : "⚠ Invalid format") : ""} />
+      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={f.qty} onChange={e => sf("qty")(e.target.value)} placeholder="84" />
+      <Field label="Expiry" value={f.expiry} onChange={e => sf("expiry")(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={f.expiry && !expValid(f.expiry) ? "⚠ Use MM/YYYY or DD/MM/YYYY" : ""} />
       <Field label="Low Stock Threshold" type="number" value={f.thr} onChange={e => sf("thr")(e.target.value)} />
       <div><label style={LB}>Location *</label><select value={showNl ? "_new" : f.loc} onChange={e => e.target.value === "_new" ? setShowNl(true) : (sf("loc")(e.target.value), setShowNl(false))} style={IN}><option value="">Select…</option>{d.medLocs.map(l => <option key={l}>{l}</option>)}<option value="_new">+ Add new…</option></select>
         {showNl && <div style={{ display: "flex", gap: 7, marginTop: 8 }}><input value={nl} onChange={e => setNl(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="New location" autoFocus /><Btn t="✓" on={() => { if (nl.trim()) { up(x => ({ ...x, medLocs: [...x.medLocs, nl.trim()] })); sf("loc")(nl.trim()); setNl(""); setShowNl(false); } }} sm /></div>}
@@ -480,7 +566,6 @@ function Pills({ d, up, user, team, say, logIt }) {
   const meds = d.meds.filter(m => m.team === team); const med = meds.find(m => m.id === id);
   const scan = async e => {
     const f = e.target.files[0]; if (!f) return; if (!id) return say("Select a medication first", "error");
-    if (!AI_ENDPOINT) return say("AI scanning not configured — enter count manually", "warn");
     setBusy(true); setRes(null);
     const b64 = await shrink(f);
     const r = await askAI('Count pills visible in this blister strip photo. Respond ONLY with JSON no markdown: {"count":0,"desc":"","confidence":"high|medium|low"}', `Expected: ${med.name} ${med.dose || ""}`, b64);
@@ -495,7 +580,6 @@ function Pills({ d, up, user, team, say, logIt }) {
     say(`Updated — new total: ${nq}`); setN(""); setRes(null);
   };
   return (<div><H1 t="Pill Count" />
-    <p style={{ fontSize: 13, color: T_MUTED, marginBottom: 14 }}>Photograph blister strips for an exact count, or enter manually.</p>
     <Card s={{ marginBottom: 12 }}><H2 t="1. Select Medication" /><select value={id} onChange={e => { setId(e.target.value); setRes(null); setN(""); }} style={IN}><option value="">Select…</option>{meds.map(m => <option key={m.id} value={m.id}>{m.name} {m.dose} — {m.loc} (stock: {m.qty})</option>)}</select>
       {med && <div style={{ marginTop: 10, background: "#f8fafc", borderRadius: 9, padding: "10px 12px", display: "flex", gap: 16 }}><div><div style={{ fontSize: 10, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>Stock</div><div style={{ fontSize: 20, fontWeight: 700, color: "#1e3a8a" }}>{med.qty}</div></div><div><div style={{ fontSize: 10, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>Expiry</div><div style={{ fontSize: 13 }}>{fmtD(med.expiry)}</div></div></div>}</Card>
     {med && <><Card s={{ marginBottom: 12 }}><H2 t="2. Count Mode" /><div style={{ display: "flex", gap: 9 }}>{[["add", "➕ Add", "Add to current total"], ["set", "🔄 Replace", "Full recount"]].map(([v, l, s]) => <button key={v} onClick={() => setMode(v)} style={{ flex: 1, padding: "10px 11px", borderRadius: 11, border: `2px solid ${mode === v ? "#1e3a8a" : "#e5e7eb"}`, background: mode === v ? "#eff6ff" : "#fff", cursor: "pointer", textAlign: "left" }}><div style={{ fontWeight: 600, fontSize: 13, color: mode === v ? "#1e3a8a" : "#374151" }}>{l}</div><div style={{ fontSize: 11, color: T_MUTED }}>{s}</div></button>)}</div></Card>
@@ -587,38 +671,71 @@ function Cfg({ d, up, user, team, say }) {
 }
 
 /* ── INVENTORY MODULE ─────────────────────────────────────── */
-function InvDash({ d }) {
-  const cats = catsOf(d); const items = d.items;
+/* Team badge — used wherever more than one team's stock is on screen */
+function TeamTag({ t, sm }) {
+  const c = teamCol(t);
+  return (<span style={{ display: "inline-flex", alignItems: "center", gap: 5, background: c.bg, color: c.fg, border: `1px solid ${c.dot}`, borderRadius: 99, padding: sm ? "2px 8px" : "3px 10px", fontSize: sm ? 11.5 : 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>
+    <span style={{ width: 7, height: 7, borderRadius: 99, background: c.dot, flexShrink: 0 }} />{teamShort(t)}</span>);
+}
+
+function InvDash({ d, team, master }) {
+  const cats = catsOf(d);
+  const locs = (d.invLocs || []).filter(l => master || l.team === team);
+  const items = d.items.filter(i => master || i.team === team);
+  const checks = d.checks.filter(c => master || c.team === team);
   const byLevel = LEVELS.map(l => ({ ...l, n: items.filter(i => alertOf(i.expiry)?.label === l.label).length }));
-  const byLoc = d.invLocs.map(l => { const c = [...d.checks].filter(x => x.loc === l).sort((a, b) => new Date(b.at) - new Date(a.at))[0]; return { loc: l, last: c, days: c ? Math.floor((new Date() - new Date(c.at)) / 86400000) : null, n: items.filter(i => i.locs.some(x => x.name === l)).length }; });
+  const byLoc = locs.map(l => {
+    const c = [...checks].filter(x => x.locId === l.id).sort((a, b) => new Date(b.at) - new Date(a.at))[0];
+    return { l, last: c, days: c ? Math.floor((new Date() - new Date(c.at)) / 86400000) : null, n: items.filter(i => (i.locs || []).some(x => x.id === l.id)).length };
+  });
   const unCat = items.filter(i => !i.cat).length;
   const byCat = [...cats.map(c => ({ ...c, n: items.filter(i => i.cat === c.k).length })),
     ...(unCat ? [{ k: "", label: "Uncategorised", col: "#f1f5f9", fg: "#334155", n: unCat }] : [])].filter(c => c.n > 0);
-  const mmLocs = d.invLocs.map(l => ({ loc: l, n: d.checks.filter(c => c.loc === l).reduce((s, c) => s + (c.mm?.length || 0), 0) })).filter(x => x.n > 0).sort((a, b) => b.n - a.n);
-  const recent = [...d.checks].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 5);
-  return (<div><H1 t="Inventory Dashboard" />
-    {!d.invLocs.length && <Card s={{ marginBottom: 12, borderLeft: "4px solid #1e3a8a", background: "#eff6ff" }}><div style={{ fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>Start here</div><div style={{ fontSize: 13, color: "#1e40af" }}>Add your storage locations in the <b>Locations</b> tab, then start adding items.</div></Card>}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>{[["Total Items", items.length, "#1e3a8a"], ["Locations", d.invLocs.length, "#0369a1"], ["Low Stock (≤5)", items.filter(i => i.qty <= 5).length, "#dc2626"], ["Expiry Alerts", items.filter(i => alertOf(i.expiry)).length, "#d97706"]].map(([l, v, c]) => <Card key={l} s={{ textAlign: "center", padding: "14px 8px" }}><div style={{ fontSize: 25, fontWeight: 700, color: c }}>{v}</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 3 }}>{l}</div></Card>)}</div>
-    {byCat.length > 0 && <Card s={{ marginBottom: 12 }}><H2 t="By Section" /><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{byCat.map(c => <div key={c.k} style={{ background: c.col, borderRadius: 9, padding: "8px 12px" }}><div style={{ fontSize: 18, fontWeight: 700, color: c.fg }}>{c.n}</div><div style={{ fontSize: 11, color: c.fg, fontWeight: 600 }}>{c.label}</div></div>)}</div></Card>}
-    <Card s={{ marginBottom: 12 }}><H2 t="Expiry Pipeline" /><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{byLevel.map(l => <div key={l.label} style={{ flex: "1 1 45%", background: l.bg, border: `1px solid ${l.br}`, borderRadius: 10, padding: "10px 12px" }}><div style={{ fontSize: 21, fontWeight: 700, color: l.fg }}>{l.n}</div><div style={{ fontSize: 11.5, color: l.fg, fontWeight: 600 }}>within {l.label}</div></div>)}</div></Card>
-    {byLoc.length > 0 && <Card s={{ marginBottom: 12 }}><H2 t="Audit Compliance" /><div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{byLoc.map(x => { const od = x.days === null || x.days > 30; return <div key={x.loc} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 11px", background: od ? "#fef2f2" : "#f0fdf4", borderRadius: 9, border: `1px solid ${od ? "#fecaca" : "#bbf7d0"}` }}><div><div style={{ fontSize: 13, fontWeight: 600 }}>{x.loc}</div><div style={{ fontSize: 11, color: T_MUTED }}>{x.n} item{x.n !== 1 ? "s" : ""}</div></div><div style={{ textAlign: "right" }}><div style={{ fontSize: 12.5, fontWeight: 700, color: od ? "#991b1b" : "#166534" }}>{x.days === null ? "Never audited" : x.days === 0 ? "Today" : `${x.days}d ago`}</div>{x.last && <div style={{ fontSize: 10, color: T_FAINT }}>{x.last.by}</div>}</div></div>; })}</div></Card>}
-    {mmLocs.length > 0 && <Card s={{ marginBottom: 12, borderLeft: "4px solid #f59e0b" }}><H2 t="Discrepancy Watch" /><p style={{ fontSize: 12, color: T_MUTED, margin: "0 0 9px" }}>Locations with recurring count mismatches.</p>{mmLocs.map(x => <div key={x.loc} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f3f4f6", fontSize: 13 }}><span>{x.loc}</span><b style={{ color: "#d97706" }}>{x.n} mismatch{x.n !== 1 ? "es" : ""}</b></div>)}</Card>}
-    <Card><H2 t="Recent Audits" />{!recent.length && <Empty t="No audits completed yet" />}{recent.map(c => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}><div><div style={{ fontSize: 13, fontWeight: 500 }}>{c.loc}</div><div style={{ fontSize: 11, color: T_FAINT }}>{c.by} · {fmtDT(c.at)}</div></div><Tag t={`${c.n} items`} bg="#dbeafe" fg="#1e40af" /></div>)}</Card>
+  const byTeam = TEAMS.map(t => ({
+    t, n: d.items.filter(i => i.team === t).length,
+    locs: (d.invLocs || []).filter(l => l.team === t).length,
+    alerts: d.items.filter(i => i.team === t && alertOf(i.expiry)).length,
+  })).filter(x => x.n || x.locs);
+  const mmLocs = locs.map(l => ({ l, n: checks.filter(c => c.locId === l.id).reduce((s, c) => s + (c.mm?.length || 0), 0) })).filter(x => x.n > 0).sort((a, b) => b.n - a.n);
+  const recent = [...checks].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 5);
+
+  return (<div><H1 t={master ? "All Teams — Inventory" : "Inventory Dashboard"} />
+    {!locs.length && <Card s={{ marginBottom: 12, borderLeft: "4px solid #1e3a8a", background: "#eff6ff" }}><div style={{ fontWeight: 700, color: "#1e40af", marginBottom: 4 }}>Start here</div><div style={{ fontSize: 13, color: "#1e40af" }}>Add storage locations for {master ? "each team" : team} in the <b>Setup</b> tab, then start adding items.</div></Card>}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 }}>{[["Total Items", items.length, "#1e3a8a"], ["Locations", locs.length, "#0369a1"], ["Low Stock (≤5)", items.filter(i => i.qty <= 5).length, "#dc2626"], ["Expiry Alerts", items.filter(i => alertOf(i.expiry)).length, "#d97706"]].map(([l, v, c]) => <Card key={l} s={{ textAlign: "center", padding: "14px 8px" }}><div style={{ fontSize: 25, fontWeight: 700, color: c }}>{v}</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 3 }}>{l}</div></Card>)}</div>
+
+    {master && byTeam.length > 0 && <Card s={{ marginBottom: 12 }}><H2 t="By Team" />
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{byTeam.map(x => { const c = teamCol(x.t); return (
+        <div key={x.t} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: c.bg, border: `1px solid ${c.dot}`, borderRadius: 10, padding: "11px 13px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}><span style={{ width: 11, height: 11, borderRadius: 99, background: c.dot }} /><span style={{ fontSize: 15, fontWeight: 700, color: c.fg }}>{x.t}</span></div>
+          <div style={{ textAlign: "right", fontSize: 12.5, color: c.fg }}><b style={{ fontSize: 17 }}>{x.n}</b> item{x.n !== 1 ? "s" : ""} · {x.locs} location{x.locs !== 1 ? "s" : ""}{x.alerts ? ` · ${x.alerts} alert${x.alerts !== 1 ? "s" : ""}` : ""}</div>
+        </div>); })}</div></Card>}
+
+    {byCat.length > 0 && <Card s={{ marginBottom: 12 }}><H2 t="By Section" /><div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{byCat.map(c => <div key={c.k || "none"} style={{ background: c.col, borderRadius: 9, padding: "8px 12px" }}><div style={{ fontSize: 18, fontWeight: 700, color: c.fg }}>{c.n}</div><div style={{ fontSize: 11, color: c.fg, fontWeight: 600 }}>{c.label}</div></div>)}</div></Card>}
+    <Card s={{ marginBottom: 12 }}><H2 t="Expiry Pipeline" /><div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>{byLevel.map(l => <div key={l.label} style={{ flex: "1 1 45%", background: l.bg, border: `1px solid ${l.br}`, borderRadius: 10, padding: "10px 12px" }}><div style={{ fontSize: 21, fontWeight: 700, color: l.fg }}>{l.n}</div><div style={{ fontSize: 11.5, color: l.fg, fontWeight: 600 }}>{l.label === "Expired" ? "expired" : `within ${l.label}`}</div></div>)}</div></Card>
+    {byLoc.length > 0 && <Card s={{ marginBottom: 12 }}><H2 t="Audit Compliance" /><div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{byLoc.map(x => { const od = x.days === null || x.days > 30; return (
+      <div key={x.l.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 11px", background: od ? "#fef2f2" : "#f0fdf4", borderRadius: 9, border: `1px solid ${od ? "#fecaca" : "#bbf7d0"}`, borderLeft: `4px solid ${teamCol(x.l.team).dot}` }}>
+        <div><div style={{ fontSize: 13.5, fontWeight: 600 }}>{x.l.name}</div>
+          <div style={{ fontSize: 11, color: T_MUTED, marginTop: 3, display: "flex", alignItems: "center", gap: 6 }}>{master && <TeamTag t={x.l.team} sm />}{x.n} item{x.n !== 1 ? "s" : ""}</div></div>
+        <div style={{ textAlign: "right" }}><div style={{ fontSize: 12.5, fontWeight: 700, color: od ? "#991b1b" : "#166534" }}>{x.days === null ? "Never audited" : x.days === 0 ? "Today" : `${x.days}d ago`}</div>{x.last && <div style={{ fontSize: 10, color: T_FAINT }}>{x.last.by}</div>}</div>
+      </div>); })}</div></Card>}
+    {mmLocs.length > 0 && <Card s={{ marginBottom: 12, borderLeft: "4px solid #f59e0b" }}><H2 t="Discrepancy Watch" />{mmLocs.map(x => <div key={x.l.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #f3f4f6", fontSize: 13 }}><span style={{ display: "flex", alignItems: "center", gap: 7 }}>{master && <TeamTag t={x.l.team} sm />}{x.l.name}</span><b style={{ color: "#d97706" }}>{x.n} mismatch{x.n !== 1 ? "es" : ""}</b></div>)}</Card>}
+    <Card><H2 t="Recent Audits" />{!recent.length && <Empty t="No audits completed yet" />}{recent.map(c => <div key={c.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f3f4f6" }}><div><div style={{ fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", gap: 7 }}>{master && <TeamTag t={c.team} sm />}{c.loc}</div><div style={{ fontSize: 11, color: T_FAINT, marginTop: 2 }}>{c.by} · {fmtDT(c.at)}</div></div><Tag t={`${c.n} items`} bg="#dbeafe" fg="#1e40af" /></div>)}</Card>
   </div>);
 }
 
 /* Stock Audit — every recorded element is verified individually */
-function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
+function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
   const cats = catsOf(d);
   const [loc, setLoc] = useState(""); const [on, setOn] = useState(false); const [c, setC] = useState({});
   const [warn, setWarn] = useState(false); const [busy, setBusy] = useState(false); const [sm, setSm] = useState("");
   const [open, setOpen] = useState(null); const fr = useRef();
-  const items = d.items.filter(i => i.locs.some(x => x.name === loc));
-  const qtyAt = i => i.locs.find(x => x.name === loc)?.qty ?? i.qty;
-  const last = [...d.checks].filter(x => x.loc === loc).sort((a, b) => new Date(b.at) - new Date(a.at))[0];
+  const myLocs = (d.invLocs || []).filter(l => master || l.team === team);
+  const here = locById(d, loc);
+  const items = d.items.filter(i => (i.locs || []).some(x => x.id === loc));
+  const qtyAt = i => (i.locs || []).find(x => x.id === loc)?.qty ?? i.qty;
+  const last = [...d.checks].filter(x => x.locId === loc).sort((a, b) => new Date(b.at) - new Date(a.at))[0];
   const mm = items.filter(i => { const s = c[i.id]; return s?.on && s.qty !== "" && +s.qty !== qtyAt(i); });
 
-  /* Which elements apply to this item — every one of them must be ticked */
   const els = i => KINDS.filter(k => k.k === "name" || k.k === "qty" || (k.k === "expiry" && i.expiry) || (k.k === "batch" && i.batch));
   const elOK = (i, k) => !!c[i.id]?.el?.[k];
   const full = i => els(i).every(k => elOK(i, k.k));
@@ -632,7 +749,6 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
   const setQ = (id, v) => setC(p => ({ ...p, [id]: { ...p[id], on: true, qty: v, el: p[id]?.el || {} } }));
   const setNo = (id, v) => setC(p => ({ ...p, [id]: { ...p[id], note: v } }));
 
-  /* Add evidence photos mid-audit */
   const attach = async (item, files) => {
     let pg = item.pg;
     if (!pg) { pg = uid(); up(x => ({ ...x, items: x.items.map(y => y.id === item.id ? { ...y, pg } : y) })); }
@@ -645,15 +761,14 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
 
   const scan = async e => {
     const f = e.target.files[0]; if (!f) return;
-    if (!AI_ENDPOINT) return say("AI scanning not configured — tick items manually", "warn");
     setBusy(true); setSm("Reading image…");
     const b64 = await shrink(f);
     const known = items.map(i => `${i.name}${i.dose ? " " + i.dose : ""} (qty ${qtyAt(i)})`).join("; ");
     const r = await askAI('Auditing medical stock. Photo may show a package (front/back) OR blister strips. Extract details; if strips visible count remaining pills. Respond ONLY with JSON no markdown: {"name":"","dose":"","batch":"","expiry":"","count":null,"is_strip":false,"confidence":"high|medium|low"}', `Known items here: ${known || "none"}`, b64);
-    if (!r) { say("Could not read image", "error"); setSm(""); setBusy(false); return; }
+    if (!r) { say("Scan failed", "error"); setSm(AI_ERR || "Could not read that image."); setBusy(false); return; }
     const match = items.find(i => r.name && i.name.toLowerCase().includes(String(r.name).toLowerCase().split(" ")[0]));
     if (match) { const q = r.count != null ? r.count : qtyAt(match); setC(p => ({ ...p, [match.id]: { on: true, qty: String(q), note: r.batch ? `Batch ${r.batch}` : "", el: p[match.id]?.el || {} } })); setOpen(match.id); setSm(`✓ ${match.name} — ${r.is_strip ? `counted ${r.count} pills` : "package identified"}${r.batch ? ` · batch ${r.batch}` : ""} — now confirm each element below`); say(`Matched: ${match.name}`); }
-    else { setSm(`⚠ Read "${r.name || "unknown"}" — no match at ${loc}`); say("No match here", "warn"); }
+    else { setSm(`⚠ Read "${r.name || "unknown"}" — no match at ${here?.name || "this location"}`); say("No match here", "warn"); }
     setBusy(false); e.target.value = "";
   };
 
@@ -666,8 +781,8 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
   };
   const go = done => {
     const rows = done.map(i => { const en = c[i.id]?.qty === "" ? qtyAt(i) : +c[i.id].qty; const pv = last?.items.find(x => x.id === i.id); return { id: i.id, name: i.name, dose: i.dose, expiry: i.expiry, batch: i.batch || "", qty: qtyAt(i), entered: en, note: c[i.id]?.note || "", el: c[i.id]?.el || {}, used: pv ? (pv.entered ?? pv.qty) - en : null }; });
-    up(x => ({ ...x, checks: [...x.checks, { id: uid(), loc, at: nowISO(), by: user.name, n: done.length, items: rows, mm: mm.map(m => ({ name: m.name, exp: qtyAt(m), act: +c[m.id].qty })) }], items: x.items.map(i => { const r = rows.find(y => y.id === i.id); return r ? { ...i, locs: i.locs.map(l => l.name === loc ? { ...l, qty: r.entered } : l), checked: nowISO() } : i; }) }));
-    logIt("AUDIT", `Stock audit at ${loc} — ${done.length} items fully verified${mm.length ? `, ${mm.length} mismatches` : ""}`, team);
+    up(x => ({ ...x, checks: [...x.checks, { id: uid(), locId: loc, loc: here?.name || "", team: here?.team || "", at: nowISO(), by: user.name, n: done.length, items: rows, mm: mm.map(m => ({ name: m.name, exp: qtyAt(m), act: +c[m.id].qty })) }], items: x.items.map(i => { const r = rows.find(y => y.id === i.id); return r ? { ...i, locs: i.locs.map(l => l.id === loc ? { ...l, qty: r.entered } : l), checked: nowISO() } : i; }) }));
+    logIt("AUDIT", `Stock audit at ${here?.name} — ${done.length} items fully verified${mm.length ? `, ${mm.length} mismatches` : ""}`, here?.team || team);
     say(`Audit saved — ${done.length} items`); setOn(false); setC({}); setLoc(""); setWarn(false); setSm(""); setOpen(null);
   };
 
@@ -675,17 +790,17 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
 
   return (<div><H1 t="Stock Audit" />
     {!on ? <Card><H2 t="Start New Audit" /><label style={LB}>Location</label>
-      {!d.invLocs.length ? <p style={{ fontSize: 13, color: "#92400e", margin: 0 }}>No locations yet — add them in the Locations tab first.</p> : <>
-        <select value={loc} onChange={e => setLoc(e.target.value)} style={IN}><option value="">Select…</option>{d.invLocs.map(l => <option key={l}>{l}</option>)}</select>
+      {!myLocs.length ? <p style={{ fontSize: 13, color: "#92400e", margin: 0 }}>No locations for {master ? "any team" : team} yet — add them in the Setup tab first.</p> : <>
+        <select value={loc} onChange={e => setLoc(e.target.value)} style={IN}><option value="">Select…</option>
+          {(master ? TEAMS : [team]).map(t => { const ls = myLocs.filter(l => l.team === t); return ls.length ? <optgroup key={t} label={t}>{ls.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup> : null; })}</select>
+        {here && <div style={{ marginTop: 9 }}><TeamTag t={here.team} /></div>}
         {loc && !items.length && <p style={{ fontSize: 12, color: "#d97706", marginTop: 8 }}>⚠ No items registered here — add via the Add tab first.</p>}
         {loc && last && <p style={{ fontSize: 12, color: T_MUTED, marginTop: 8 }}>Last audit: {fmtDT(last.at)} by {last.by}</p>}
-        <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 10, padding: "10px 13px", fontSize: 12.5, color: "#1e40af", marginTop: 11 }}>Each item is signed off element by element — product name, expiry, amount and batch. An item only counts as audited once all of its elements are confirmed.</div>
         <div style={{ marginTop: 12 }}><Btn t="Start Audit" on={() => { if (!loc) return say("Select a location", "error"); setOn(true); setC({}); }} dis={!loc || !items.length} full /></div></>}</Card>
       : <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div><div style={{ fontWeight: 700, fontSize: 16 }}>{loc}</div><div style={{ fontSize: 11.5, color: T_MUTED }}>{items.length} registered · {verified.length} fully verified{started.length > verified.length ? ` · ${started.length - verified.length} part-done` : ""}</div></div><Btn t="✓ Finish" on={fin} bg="#16a34a" sm /></div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}><div><div style={{ fontWeight: 700, fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>{here?.name}<TeamTag t={here?.team} sm /></div><div style={{ fontSize: 11.5, color: T_MUTED }}>{items.length} registered · {verified.length} fully verified{started.length > verified.length ? ` · ${started.length - verified.length} part-done` : ""}</div></div><Btn t="✓ Finish" on={fin} bg="#16a34a" sm /></div>
         <Card s={{ marginBottom: 11, background: "#f8fafc" }}><input type="file" accept="image/*" capture="environment" ref={fr} onChange={scan} style={{ display: "none" }} />
           <Btn t={busy ? "⏳ Reading photo…" : "📷 Photograph Item or Strip"} on={() => fr.current.click()} dis={busy} full />
-          <div style={{ fontSize: 11.5, color: T_MUTED, marginTop: 7, textAlign: "center" }}>Photograph the package or blister strips to jump to that item</div>
           {sm && <div style={{ marginTop: 9, background: "#fff", border: "1px solid #e5e7eb", borderRadius: 9, padding: "9px 12px", fontSize: 12, color: "#374151" }}>{sm}</div>}</Card>
         {mm.length > 0 && <Card s={{ borderLeft: "4px solid #f59e0b", background: "#fffbeb", marginBottom: 10 }}><div style={{ fontWeight: 700, color: "#92400e", marginBottom: 4 }}>⚠ {mm.length} mismatch{mm.length !== 1 ? "es" : ""}</div>{mm.map(m => <div key={m.id} style={{ fontSize: 12, color: "#78350f" }}>• {m.name} — expected {qtyAt(m)}, counted {c[m.id]?.qty}</div>)}</Card>}
         {warn && <Card s={{ border: "2px solid #f59e0b", marginBottom: 10 }}><div style={{ fontWeight: 700, marginBottom: 8 }}>Save with mismatches?</div><div style={{ fontSize: 12, color: T_MUTED, marginBottom: 10 }}>Registered quantities will update to counted values and be flagged in history.</div><div style={{ display: "flex", gap: 8 }}><Btn t="Save Anyway" on={() => go(verified)} bg="#d97706" sm /><Btn t="Go Back" on={() => setWarn(false)} bg="#f3f4f6" fg="#374151" sm /></div></Card>}
@@ -709,8 +824,8 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
                     {shotsOf(i).length > 0
                       ? <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>{shotsOf(i).map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
                           <img src={s.data} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: "1px solid #e2e8f0" }} />
-                          <button onClick={() => detach(i, s.id)} style={{ position: "absolute", top: -5, right: -5, width: 19, height: 19, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 11, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>\u00d7</button></div>)}</div>
-                      : <div style={{ fontSize: 11, color: "#d97706", marginTop: 6 }}>Tap \ud83d\udcf7 to capture the item \u2014 one shot showing name, expiry, amount and batch is enough</div>}
+                          <button onClick={() => detach(i, s.id)} style={{ position: "absolute", top: -5, right: -5, width: 19, height: 19, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 11, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>×</button></div>)}</div>
+                      : <div style={{ fontSize: 11, color: "#d97706", marginTop: 6 }}>Tap 📷 to capture the item — one shot showing name, expiry, amount and batch is enough</div>}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{els(i).map(k => {
                     const okd = elOK(i, k.k);
@@ -732,7 +847,6 @@ function StockAudit({ d, up, user, team, say, logIt, ph, setPh }) {
       </div>}
   </div>);
 }
-/* Small camera button used inside each audit element row */
 function AuditShot({ onPick }) {
   const r = useRef();
   return (<>
@@ -741,33 +855,39 @@ function AuditShot({ onPick }) {
   </>);
 }
 
-function AddItems({ d, up, user, say, ph, setPh }) {
+function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const cats = catsOf(d);
   const [sel, setSel] = useState([]); const [filt, setFilt] = useState("All"); const [show, setShow] = useState(false);
+  const [tgt, setTgt] = useState(master ? "" : team);   // Master must choose; otherwise the team you're viewing
   const [name, setName] = useState(""); const [dose, setDose] = useState(""); const [cat, setCat] = useState("");
   const [catBusy, setCatBusy] = useState(false); const [catAuto, setCatAuto] = useState(false); const [filled, setFilled] = useState("");
   const [qty, setQty] = useState(""); const [sameAll, setSameAll] = useState(null);
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const scanRef = useRef();
+  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const [scanRows, setScanRows] = useState([]);
   const [newCat, setNewCat] = useState(""); const [showNewCat, setShowNewCat] = useState(false);
-  const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false);
   const [xf, setXf] = useState(null); const [xt, setXt] = useState(""); const [xc, setXc] = useState("");
+
+  useEffect(() => { if (!master) setTgt(team); }, [team, master]);
+
+  const scOK = k => scanRows.find(x => x.k === k)?.ok;
+  const Tick = () => <span style={{ color: "#16a34a", fontWeight: 800, marginLeft: 5 }}>✓</span>;
   const isMed = cat === "Medications"; const totalQty = +qty || 0;
   const allocated = Object.values(locQty).reduce((s, n) => s + n, 0);
   const remaining = Math.max(0, totalQty - allocated);
   const variantTotal = variants.reduce((s, v) => s + (+v.qty || 0), 0);
-
-  /* Autocomplete from everything already registered */
+  const formLocs = (d.invLocs || []).filter(l => l.team === tgt);           // only the target team's places
+  const viewLocs = (d.invLocs || []).filter(l => master || l.team === team); // what the register lists
+  const myItems = d.items.filter(i => master || i.team === team);
   const prior = [...new Map(d.items.map(i => [i.name.toLowerCase(), i])).values()];
+
   const onName = v => {
     setName(v); setCatAuto(false);
     const m = prior.find(p => p.name.toLowerCase() === v.trim().toLowerCase());
     if (m) { if (!cat) setCat(m.cat); if (!dose && m.dose) setDose(m.dose); setFilled(m.name); }
     else setFilled("");
   };
-
   const autoCat = async () => {
     if (!name.trim() || cat || catAuto || !AI_ENDPOINT) return;
     setCatBusy(true);
@@ -777,23 +897,74 @@ function AddItems({ d, up, user, say, ph, setPh }) {
     setCatBusy(false);
   };
   const lookupDoses = async () => {
-    if (!name.trim()) return say("Enter a medication name first", "error");
-    if (!AI_ENDPOINT) return say("BNF lookup not configured — enter dose manually", "warn");
-    setDl2(true); setDoses([]);
-    const r = await askAI('UK BNF assistant. List licensed UK strengths. Respond ONLY with JSON no markdown: {"doses":["400mg tablets"]}', `Medication: ${name}`);
-    if (r?.doses?.length) { setDoses(r.doses); say(`${r.doses.length} BNF strengths found`); } else say("None found — enter manually", "warn");
+    if (!name.trim()) return say("Type the product name first", "error");
+    setDl2(true); setDoses([]); setBnf(null);
+    const r = await askAI(
+      'UK BNF assistant. For the product named, give the licensed UK strengths and the usual adult presentation. If it is not a medicine, say so. Respond ONLY with JSON no markdown: {"is_medicine":true,"generic":"","doses":["400mg tablets"],"note":""}',
+      `Product: ${name}`);
     setDl2(false);
+    if (!r) return say(AI_ERR || "BNF lookup failed", "error");
+    if (r.is_medicine === false) { setBnf({ none: true }); return say("Not a medicine — no BNF entry", "warn"); }
+    setBnf({ generic: r.generic || "", note: r.note || "" });
+    if (r.doses?.length) { setDoses(r.doses); if (!cat && cats.some(c => c.k === "Medications")) setCat("Medications"); say(`${r.doses.length} strength${r.doses.length !== 1 ? "s" : ""} found`); }
+    else say("No strengths listed — type it in", "warn");
   };
-  /* Allocation can never exceed the quantity entered */
-  const bumpLoc = l => { if (!totalQty) return say("Enter a quantity first", "error"); if (remaining <= 0) return say(`All ${totalQty} already allocated`, "warn"); setLocQty(p => ({ ...p, [l]: (p[l] || 0) + 1 })); };
-  const dropLoc = l => setLocQty(p => { const c = (p[l] || 0) - 1; const n = { ...p }; if (c <= 0) delete n[l]; else n[l] = c; return n; });
+  const [doses, setDoses] = useState([]); const [dl2, setDl2] = useState(false); const [bnf, setBnf] = useState(null);
+
+  const bumpLoc = id => { if (!totalQty) return say("Enter a quantity first", "error"); if (remaining <= 0) return say(`All ${totalQty} already allocated`, "warn"); setLocQty(p => ({ ...p, [id]: (p[id] || 0) + 1 })); };
+  const dropLoc = id => setLocQty(p => { const n = { ...p }; const v = (n[id] || 0) - 1; if (v <= 0) delete n[id]; else n[id] = v; return n; });
   const setVariantCount = n => setVariants(Array.from({ length: n }, (_, i) => variants[i] || { qty: "1", expiry: "", batch: "" }));
   const addPics = async files => {
     setPicBusy(true); const add = [];
     for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
-    setPics(p => [...p, ...add]); setPicBusy(false);
+    const all = [...pics, ...add];
+    setPics(all); setPicBusy(false);
+    if (add.length) readPics(all);
   };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setNewCat(""); setShowNewCat(false); setShow(false); };
+
+  /* Reads the photos you've attached and fills any blank field. The same shots
+     stay on the item as audit evidence — nothing is taken twice. */
+  const readPics = async shots => {
+    if (!shots.length) return;
+    setScanBusy(true); setScanMsg("");
+    const imgs = shots.slice(-4).map(x => x.data.split(",")[1]);
+    const known = prior.slice(0, 40).map(p => p.name).join("; ");
+    const r = await askAI(
+      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
+      `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
+      imgs);
+    setScanBusy(false);
+    if (!r) { setScanRows([]); setScanMsg(AI_ERR || "Could not read those photos — fill the fields in manually."); return say("Couldn't read the photos", "error"); }
+    setScanMsg("");
+    const rd = v => (v == null ? "" : String(v).trim());
+    const rows = [];
+    const push = (k, label, value, ok, note) => rows.push({ k, label, value, ok, note });
+
+    if (rd(r.name)) { if (!name.trim()) onName(rd(r.name)); push("name", "Product name", rd(r.name), true, name.trim() ? "kept what you typed" : ""); }
+    else push("name", "Product name", "", false);
+
+    if (rd(r.dose)) { if (!dose) setDose(rd(r.dose)); push("dose", "Dose / strength", rd(r.dose), true, dose ? "kept what you typed" : ""); }
+
+    if (rd(r.expiry)) {
+      if (!expValid(rd(r.expiry))) push("expiry", "Expiry date", rd(r.expiry), false, "not a date the app accepts");
+      else { if (!expiry) setExpiry(rd(r.expiry)); push("expiry", "Expiry date", fmtD(rd(r.expiry)), true, expiry ? "kept what you typed" : ""); }
+    } else push("expiry", "Expiry date", "", false);
+
+    const count = r.remaining ?? r.total;
+    if (count != null && !isNaN(+count)) {
+      if (!qty) { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); }
+      push("qty", "Amount / strip count", `${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""}`, true, qty ? "kept what you typed" : "");
+    } else push("qty", "Amount / strip count", "", false);
+
+    if (rd(r.batch)) { if (!batch) setBatch(rd(r.batch)); push("batch", "Batch / lot number", rd(r.batch), true, batch ? "kept what you typed" : ""); }
+    else push("batch", "Batch / lot number", "", false, "may not be printed on this item");
+
+    setScanRows(rows);
+    const okN = rows.filter(x => x.ok).length;
+    say(okN === rows.length ? "All fields read from the photo" : `${okN} of ${rows.length} fields read`);
+  };
+
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
 
   const addCat = () => {
     const t = newCat.trim();
@@ -804,94 +975,86 @@ function AddItems({ d, up, user, say, ph, setPh }) {
     setCat(t); setCatAuto(false); setNewCat(""); setShowNewCat(false); say(`"${t}" added`);
   };
 
-  /* Scan to fill — reads the label and populates the fields. Images are never stored. */
-  const scanFill = async files => {
-    if (!AI_ENDPOINT) return say("Scanning needs the AI endpoint — see AI SETUP at the foot of App.jsx", "warn");
-    setScanBusy(true); setScanMsg("");
-    const imgs = [];
-    for (const f of Array.from(files).slice(0, 4)) { try { imgs.push(await shrink(f)); } catch {} }
-    if (!imgs.length) { setScanBusy(false); return say("Could not open those photos", "error"); }
-    const known = prior.slice(0, 40).map(p => p.name).join("; ");
-    const r = await askAI(
-      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
-      `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
-      imgs);
-    setScanBusy(false);
-    if (!r) return say("Could not read that — fill the fields in manually", "error");
-    const got = [], kept = [], missed = [];
-    const rd = v => (v == null ? "" : String(v).trim());
-    if (rd(r.name)) { if (name.trim()) kept.push("name"); else { onName(rd(r.name)); got.push(`name (${rd(r.name)})`); } } else missed.push("name");
-    if (rd(r.dose)) { if (!dose) { setDose(rd(r.dose)); got.push(`dose (${rd(r.dose)})`); } else kept.push("dose"); }
-    if (rd(r.expiry)) {
-      if (!expValid(rd(r.expiry))) missed.push(`expiry (read "${rd(r.expiry)}" — not a date the app accepts)`);
-      else if (expiry) kept.push("expiry");
-      else { setExpiry(rd(r.expiry)); got.push(`expiry (${fmtD(rd(r.expiry))})`); }
-    } else missed.push("expiry");
-    if (rd(r.batch)) { if (batch) kept.push("batch"); else { setBatch(rd(r.batch)); got.push(`batch (${rd(r.batch)})`); } } else missed.push("batch / lot");
-    const count = r.remaining ?? r.total;
-    if (count != null && !isNaN(+count)) {
-      if (qty) kept.push("quantity");
-      else { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); got.push(`quantity (${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""})`); }
-    } else missed.push("quantity");
-    setScanMsg([
-      got.length ? `Filled in: ${got.join(", ")}.` : "Nothing could be filled in from that.",
-      kept.length ? `Left alone because you'd already typed them: ${kept.join(", ")}.` : "",
-      missed.length ? `Couldn't read: ${missed.join(", ")} — add by hand.` : "",
-      "Check every field against the packaging before saving.",
-    ].filter(Boolean).join(" "));
-    if (got.length) say(`${got.length} field${got.length !== 1 ? "s" : ""} filled in`);
-  };
-
   const add = () => {
+    if (!tgt) return say("Choose which team this belongs to", "error");
     if (!name.trim()) return say("Item name required", "error");
     if (!totalQty) return say("Enter the quantity being added", "error");
-    const locs = Object.entries(locQty).filter(([, n]) => n > 0).map(([nm, n]) => ({ name: nm, qty: n }));
+    const locs = Object.entries(locQty).filter(([, n]) => n > 0).map(([id, n]) => ({ id, qty: n }));
     if (!locs.length) return say("Assign the item to at least one location", "error");
     if (allocated !== totalQty) return say(`${remaining} of ${totalQty} still to allocate`, "error");
     const pg = pics.length ? uid() : null;
     if (pg) setPh(p => ({ ...p, [pg]: pics }));
+    const locTxt = locs.map(l => locNm(d, l.id)).join(", ");
     if (sameAll === false && variants.length) {
       if (variants.find(v => !expValid(v.expiry))) return say("Each batch needs a valid expiry", "error");
       variants.forEach((v, idx) => {
-        up(x => ({ ...x, items: [...x.items, { id: uid(), name: name.trim(), dose, cat, expiry: v.expiry, batch: v.batch, qty: +v.qty || 1, locs: idx === 0 ? locs : [locs[0]], pg, added: nowISO(), checked: nowISO() }] }));
-        const a = alertOf(v.expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), name: `${name} ${dose || ""}`.trim(), loc: locs.map(l => l.name).join(", "), expiry: v.expiry, lvl: a.label, done: false }] }));
+        up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry: v.expiry, batch: v.batch, qty: +v.qty || 1, locs: idx === 0 ? locs : [locs[0]], pg, added: nowISO(), checked: nowISO() }] }));
+        const a = alertOf(v.expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry: v.expiry, lvl: a.label, done: false }] }));
       });
-      say(`${variants.length} batches added`); reset(); return;
+      say(`${variants.length} batches added to ${teamShort(tgt)}`); reset(); return;
     }
     if (!expValid(expiry)) return say("Enter expiry as MM/YYYY or DD/MM/YYYY", "error");
-    up(x => ({ ...x, items: [...x.items, { id: uid(), name: name.trim(), dose, cat, expiry, batch, qty: totalQty, locs, pg, added: nowISO(), checked: nowISO() }] }));
-    const a = alertOf(expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), name: `${name} ${dose || ""}`.trim(), loc: locs.map(l => l.name).join(", "), expiry, lvl: a.label, done: false }] }));
+    up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, locs, pg, added: nowISO(), checked: nowISO() }] }));
+    const a = alertOf(expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry, lvl: a.label, done: false }] }));
     say(`Added to ${locs.length} location${locs.length !== 1 ? "s" : ""}${pics.length ? ` with ${pics.length} photo${pics.length !== 1 ? "s" : ""}` : ""}`); reset();
   };
   const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); say("Removed"); };
   const move = () => {
     if (!xt && !xc) return say("Choose a location or a section to move to", "error");
     const nextCat = xc === "_none" ? "" : xc;
-    up(x => ({ ...x, items: x.items.map(i => i.id === xf.id ? { ...i, ...(xt ? { locs: [{ name: xt, qty: i.qty }] } : {}), ...(xc ? { cat: nextCat } : {}) } : i) }));
-    say(`${xf.name} moved${xt ? ` → ${xt}` : ""}${xc ? ` → ${xc === "_none" ? "Uncategorised" : catOf(xc, cats).label}` : ""}`);
+    up(x => ({ ...x, items: x.items.map(i => i.id === xf.id ? { ...i, ...(xt ? { locs: [{ id: xt, qty: i.qty }], team: locTm(d, xt) } : {}), ...(xc ? { cat: nextCat } : {}) } : i) }));
+    say(`${xf.name} moved${xt ? ` → ${locNm(d, xt)}` : ""}${xc ? ` → ${xc === "_none" ? "Uncategorised" : catOf(xc, cats).label}` : ""}`);
     setXf(null); setXt(""); setXc("");
   };
-  const usedCats = [...new Set(d.items.map(i => i.cat))];
-  const grp = sel.reduce((a, l) => { const it = d.items.filter(i => i.locs.some(x => x.name === l) && (filt === "All" || i.cat === filt)); if (it.length) a[l] = it; return a; }, {});
+  const usedCats = [...new Set(myItems.map(i => i.cat))];
+  const grp = sel.reduce((acc, id) => { const it = myItems.filter(i => (i.locs || []).some(x => x.id === id) && (filt === "All" || i.cat === filt)); if (it.length) acc[id] = it; return acc; }, {});
 
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}><H1 t="Item Register" /><Btn t={show ? "Cancel" : "+ Add"} on={() => show ? reset() : setShow(true)} sm /></div>
     {show && <Card s={{ marginBottom: 13 }}><H2 t="Add Item" /><div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: "13px 14px" }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1e40af" }}>Scan to fill</div>
-        <div style={{ fontSize: 13.5, color: "#1e40af", marginTop: 4, marginBottom: 10, lineHeight: 1.45 }}>
-          Photograph the packaging, the printed expiry, the strips and the batch number — front and back, up to four shots at once. Whatever is legible drops into the fields below. These shots are read and discarded, not stored.
-        </div>
-        <input type="file" accept="image/*" capture="environment" multiple ref={scanRef} style={{ display: "none" }}
-          onChange={e => { if (e.target.files?.length) scanFill(e.target.files); e.target.value = ""; }} />
-        <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy || !AI_ENDPOINT} full />
-        {!AI_ENDPOINT && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 9, lineHeight: 1.45 }}>Scanning is switched off until AI_ENDPOINT is set — see AI SETUP at the foot of this file. Fill the fields in by hand meanwhile.</div>}
-        {scanMsg && <div style={{ marginTop: 10, background: "#fff", border: "1px solid #bfdbfe", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#1f2937", lineHeight: 1.5 }}>{scanMsg}</div>}
+      {master && <div><label style={LB}>Team <span style={{ color: "#ef4444" }}>*</span></label>
+        <select value={tgt} onChange={e => { setTgt(e.target.value); setLocQty({}); }} style={{ ...IN, background: tgt ? teamCol(tgt).bg : "#fff", color: tgt ? teamCol(tgt).fg : "#000", fontWeight: 700 }}>
+          <option value="">Choose a team…</option>{TEAMS.map(t => <option key={t} value={t}>{t}</option>)}</select>
+</div>}
+
+
+      <div><label style={LB}>Photos</label>
+        <PhotoBlock shots={pics} busy={picBusy || scanBusy} onAdd={addPics} onDel={id => { const left = pics.filter(s => s.id !== id); setPics(left); if (!left.length) { setScanRows([]); setScanMsg(""); } }} />
+        {scanBusy && <div style={{ fontSize: 13, color: "#1e40af", marginTop: 8, fontWeight: 600 }}>Reading the photo…</div>}
+        {pics.length > 0 && !scanBusy && <div style={{ marginTop: 8 }}><Btn t="Read photos again" on={() => readPics(pics)} bg="#f3f4f6" fg="#1e3a8a" sm /></div>}
+        {scanMsg && <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde047", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#92400e", lineHeight: 1.5 }}>{scanMsg}</div>}
+        {scanRows.length > 0 && (() => {
+          const okN = scanRows.filter(x => x.ok).length; const allOk = okN === scanRows.length;
+          return (<div style={{ marginTop: 10, background: "#fff", border: `1.5px solid ${allOk ? "#86efac" : "#fcd34d"}`, borderRadius: 10, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", background: allOk ? "#f0fdf4" : "#fffbeb", borderBottom: "1px solid #e2e8f0" }}>
+              <span style={{ width: 22, height: 22, borderRadius: 99, background: allOk ? "#16a34a" : "#d97706", color: "#fff", fontSize: 13, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{allOk ? "✓" : "!"}</span>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: allOk ? "#166534" : "#92400e" }}>{allOk ? "Everything read — check it against the pack" : `${okN} of ${scanRows.length} read — fill the rest in below`}</div>
+            </div>
+            {scanRows.map(x => (
+              <div key={x.k} style={{ display: "flex", alignItems: "flex-start", gap: 9, padding: "9px 12px", borderTop: "1px solid #f1f5f9" }}>
+                <span style={{ width: 19, height: 19, borderRadius: 99, background: x.ok ? "#16a34a" : "#fde68a", color: x.ok ? "#fff" : "#92400e", fontSize: 11.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>{x.ok ? "✓" : "–"}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11.5, color: T_MUTED, fontWeight: 600 }}>{x.label}</div>
+                  <div style={{ fontSize: 14.5, fontWeight: 600, color: x.ok ? "#0f172a" : "#92400e", wordBreak: "break-word" }}>{x.ok ? x.value : "Not readable — type it in"}</div>
+                  {x.note && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 1 }}>{x.note}</div>}
+                </div>
+              </div>))}
+          </div>);
+        })()}
       </div>
-      <div><label style={LB}>Item Name</label>
-        <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={IN} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
+      <div><label style={LB}>Item Name{scOK("name") && <Tick />}</label>
+        <div style={{ display: "flex", gap: 7 }}>
+          <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={{ ...IN, flex: 1 }} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
+          <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm />
+        </div>
         <datalist id="prioritems">{prior.map(p => <option key={p.id} value={p.name}>{catOf(p.cat, cats).label}</option>)}</datalist>
-        <div style={{ fontSize: 13, color: filled ? "#16a34a" : T_MUTED, marginTop: 5 }}>{filled ? `✓ Matched a previous entry — section and dose filled in` : prior.length ? `Suggestions from ${prior.length} item${prior.length !== 1 ? "s" : ""} already registered` : "First item — no suggestions yet"}</div></div>
+        {bnf && !bnf.none && (bnf.generic || doses.length > 0) && <div style={{ marginTop: 8, border: "1px solid #bbf7d0", background: "#f0fdf4", borderRadius: 10, padding: "10px 12px" }}>
+          {bnf.generic && <div style={{ fontSize: 13.5, fontWeight: 700, color: "#166534" }}>{bnf.generic}</div>}
+          {doses.length > 0 && <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: bnf.generic ? 8 : 0 }}>
+            {doses.map(x => <button key={x} onClick={() => setDose(x)} style={{ padding: "6px 11px", borderRadius: 99, border: `1.5px solid ${dose === x ? "#16a34a" : "#bbf7d0"}`, background: dose === x ? "#16a34a" : "#fff", color: dose === x ? "#fff" : "#166534", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>{dose === x ? "✓ " : ""}{x}</button>)}</div>}
+          {bnf.note && <div style={{ fontSize: 12.5, color: "#166534", marginTop: 8 }}>{bnf.note}</div>}
+        </div>}</div>
+
       <div><label style={LB}>Section {catBusy && <span style={{ color: "#1e3a8a", fontSize: 11 }}>· suggesting…</span>}{catAuto && !catBusy && <span style={{ color: "#16a34a", fontSize: 11 }}>· suggested</span>}</label>
         <select value={showNewCat ? "_new" : cat}
           onChange={e => { if (e.target.value === "_new") setShowNewCat(true); else { setCat(e.target.value); setShowNewCat(false); setCatAuto(false); } }}
@@ -902,19 +1065,20 @@ function AddItems({ d, up, user, say, ph, setPh }) {
         {showNewCat && <div style={{ display: "flex", gap: 7, marginTop: 8 }}>
           <input value={newCat} onChange={e => setNewCat(e.target.value)} onKeyDown={e => e.key === "Enter" && addCat()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK kit" autoFocus />
           <Btn t="✓" on={addCat} sm /><Btn t="✕" on={() => { setShowNewCat(false); setNewCat(""); }} bg="#f3f4f6" fg="#374151" sm /></div>}
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: 5 }}>Optional. Leave it blank and the item files under Uncategorised — you can set it later from the → button.</div></div>
-      {isMed && <div><label style={LB}>Dose / Strength</label><div style={{ display: "flex", gap: 7 }}>
-        {doses.length ? <select value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }}><option value="">Select strength…</option>{doses.map(x => <option key={x}>{x}</option>)}</select> : <input value={dose} onChange={e => setDose(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="e.g. 400mg" />}
-        <Btn t={dl2 ? "…" : "BNF"} on={lookupDoses} dis={dl2} bg="#f3f4f6" fg="#1e3a8a" sm /></div></div>}
-      <Field label="Quantity *" type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" hint="This is the maximum you can spread across locations below" />
+</div>
+
+      {(isMed || dose || doses.length > 0) && <div><label style={LB}>Dose / Strength{scOK("dose") && <Tick />}</label>
+        <input value={dose} onChange={e => setDose(e.target.value)} style={IN} placeholder="e.g. 400mg" /></div>}
+
+      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" />
       {totalQty > 1 && <div style={{ background: "#f8fafc", borderRadius: 11, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 9 }}>You've entered {totalQty} units. Do they all share the same expiry and batch/lot number?</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={() => { setSameAll(true); setVariants([]); }} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `2px solid ${sameAll === true ? "#16a34a" : "#e5e7eb"}`, background: sameAll === true ? "#f0fdf4" : "#fff", fontWeight: 600, fontSize: 13, color: sameAll === true ? "#166534" : "#374151", cursor: "pointer" }}>Yes — all identical</button>
           <button onClick={() => { setSameAll(false); setVariantCount(2); }} style={{ flex: 1, padding: "9px", borderRadius: 9, border: `2px solid ${sameAll === false ? "#d97706" : "#e5e7eb"}`, background: sameAll === false ? "#fffbeb" : "#fff", fontWeight: 600, fontSize: 13, color: sameAll === false ? "#92400e" : "#374151", cursor: "pointer" }}>No — they differ</button></div></div>}
       {(totalQty <= 1 || sameAll === true) && <>
-        <Field label="Expiry" value={expiry} onChange={e => setExpiry(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={expiry ? (expValid(expiry) ? `✓ ${fmtD(expiry)} · ${dLeft(expiry)} days` : "⚠ Use MM/YYYY or DD/MM/YYYY") : "Month & year alone is fine"} />
-        <Field label="Batch / Lot No." value={batch} onChange={e => setBatch(e.target.value)} placeholder="Optional" /></>}
+        <Field label={<>Expiry{scOK("expiry") && <Tick />}</>} value={expiry} onChange={e => setExpiry(e.target.value)} placeholder="MM/YYYY or DD/MM/YYYY" hint={expiry && !expValid(expiry) ? "⚠ Use MM/YYYY or DD/MM/YYYY" : ""} />
+        <Field label={<>Batch / Lot No.{scOK("batch") && <Tick />}</>} value={batch} onChange={e => setBatch(e.target.value)} placeholder="Optional" /></>}
       {sameAll === false && <div style={{ background: "#fffbeb", borderRadius: 11, padding: "12px 14px", border: "1px solid #fde047" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#92400e" }}>Batch details ({variantTotal}/{totalQty})</div>
@@ -927,56 +1091,65 @@ function AddItems({ d, up, user, say, ph, setPh }) {
             <div style={{ gridColumn: "1/-1" }}><label style={{ ...LB, fontSize: 11 }}>Expiry</label><input value={v.expiry} onChange={e => setVariants(p => p.map((x, k) => k === i ? { ...x, expiry: e.target.value } : x))} style={{ ...IN, padding: "7px 10px", fontSize: 14, borderColor: v.expiry && !expValid(v.expiry) ? "#f87171" : "#94a3b8" }} placeholder="MM/YYYY or DD/MM/YYYY" />
               {v.expiry && expValid(v.expiry) && <div style={{ fontSize: 10.5, color: "#16a34a", marginTop: 3 }}>✓ {fmtD(v.expiry)}</div>}</div></div></div>)}</div>}
 
-      {/* Locations — capped at the quantity entered */}
       <div><label style={LB}>Locations <span style={{ color: "#ef4444" }}>*</span></label>
-        {!d.invLocs.length ? <div style={{ background: "#fffbeb", border: "1px solid #fde047", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: "#92400e" }}>No locations yet — add them in the <b>Locations</b> tab, then come back.</div> : <>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{allocated} of {totalQty || 0} allocated</div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: totalQty === 0 ? T_MUTED : remaining === 0 ? "#166534" : "#d97706" }}>{totalQty === 0 ? "Enter a quantity first" : remaining === 0 ? "✓ All placed" : `${remaining} left to place`}</div></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{d.invLocs.map(l => { const n = locQty[l] || 0; const canAdd = totalQty > 0 && remaining > 0; return (
-            <div key={l} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, border: `1px solid ${n ? "#1e3a8a" : "#e2e8f0"}`, background: n ? "#eff6ff" : "#fff", borderRadius: 11, padding: "9px 12px" }}>
-              <div style={{ fontSize: 15, fontWeight: n ? 700 : 500, color: n ? "#1e3a8a" : "#1f2937" }}>📍 {l}</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                <button onClick={() => dropLoc(l)} disabled={!n} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", fontSize: 19, fontWeight: 700, cursor: n ? "pointer" : "default", opacity: n ? 1 : .35 }}>−</button>
-                <div style={{ minWidth: 26, textAlign: "center", fontSize: 17, fontWeight: 700, color: n ? "#1e3a8a" : T_FAINT }}>{n}</div>
-                <button onClick={() => bumpLoc(l)} disabled={!canAdd} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: canAdd ? "#1e3a8a" : "#fff", color: canAdd ? "#fff" : T_FAINT, fontSize: 19, fontWeight: 700, cursor: canAdd ? "pointer" : "default", opacity: canAdd ? 1 : .4 }}>+</button>
-              </div></div>); })}</div></>}</div>
+        {!tgt ? <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: T_MUTED }}>Choose a team above first.</div>
+          : !formLocs.length ? <div style={{ background: "#fffbeb", border: "1px solid #fde047", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: "#92400e" }}>{teamShort(tgt)} has no locations yet — add them in the <b>Setup</b> tab, then come back.</div> : <>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{allocated} of {totalQty || 0} allocated</div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: totalQty === 0 ? T_MUTED : remaining === 0 ? "#166534" : "#d97706" }}>{totalQty === 0 ? "Enter a quantity first" : remaining === 0 ? "✓ All placed" : `${remaining} left to place`}</div></div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{formLocs.map(l => { const n = locQty[l.id] || 0; const canAdd = totalQty > 0 && remaining > 0; return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, border: `1px solid ${n ? teamCol(l.team).dot : "#e2e8f0"}`, background: n ? teamCol(l.team).bg : "#fff", borderRadius: 11, padding: "9px 12px" }}>
+                <div style={{ fontSize: 15, fontWeight: n ? 700 : 500, color: n ? teamCol(l.team).fg : "#1f2937" }}>📍 {l.name}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <button onClick={() => dropLoc(l.id)} disabled={!n} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", fontSize: 19, fontWeight: 700, cursor: n ? "pointer" : "default", opacity: n ? 1 : .35 }}>−</button>
+                  <div style={{ minWidth: 26, textAlign: "center", fontSize: 17, fontWeight: 700, color: n ? teamCol(l.team).fg : T_FAINT }}>{n}</div>
+                  <button onClick={() => bumpLoc(l.id)} disabled={!canAdd} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: canAdd ? "#1e3a8a" : "#fff", color: canAdd ? "#fff" : T_FAINT, fontSize: 19, fontWeight: 700, cursor: canAdd ? "pointer" : "default", opacity: canAdd ? 1 : .4 }}>+</button>
+                </div></div>); })}</div></>}</div>
 
-      {/* Photo evidence */}
-      <div><label style={LB}>Photos</label>
-        <div style={{ fontSize: 13, color: T_MUTED, marginTop: -3, marginBottom: 9 }}>One shot showing the name, expiry, amount remaining and batch number is usually enough \u2014 add more only where something is unreadable or printed elsewhere on the pack. These are the evidence shown at audit.</div>
-        <PhotoBlock shots={pics} busy={picBusy} onAdd={addPics} onDel={id => setPics(p => p.filter(s => s.id !== id))} />
-        {pics.length > 0 && <div style={{ fontSize: 12, color: "#16a34a", marginTop: 7, fontWeight: 600 }}>{pics.length} photo{pics.length !== 1 ? "s" : ""} attached</div>}</div>
 
       <Btn t="Save Item" on={add} full />
     </div></Card>}
 
-    <Card s={{ marginBottom: 10 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ fontWeight: 700, fontSize: 14 }}>Show items stored in</span><div style={{ display: "flex", gap: 10 }}><button onClick={() => setSel([...d.invLocs])} style={{ background: "none", border: "none", color: "#1e3a8a", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>All</button><button onClick={() => setSel([])} style={{ background: "none", border: "none", color: T_MUTED, fontSize: 13, cursor: "pointer" }}>None</button></div></div>
-      {!d.invLocs.length ? <div style={{ fontSize: 13, color: T_MUTED }}>No locations set up yet.</div> :
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{d.invLocs.map(l => { const on = sel.includes(l); const n = d.items.filter(i => i.locs.some(x => x.name === l)).length; return <button key={l} onClick={() => setSel(p => on ? p.filter(x => x !== l) : [...p, l])} style={{ padding: "7px 13px", borderRadius: 99, border: `1.5px solid ${on ? "#1e3a8a" : "#cbd5e1"}`, background: on ? "#1e3a8a" : "#fff", color: on ? "#fff" : "#334155", fontSize: 13.5, fontWeight: on ? 700 : 500, cursor: "pointer" }}>{on ? "✓ " : ""}{l} ({n})</button>; })}</div>}</Card>
-    {usedCats.length > 1 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>{["All", ...usedCats].map(c => { const co = c === "All" ? { col: "#f3f4f6", fg: "#374151" } : catOf(c, cats); return <button key={c} onClick={() => setFilt(c)} style={{ padding: "5px 11px", borderRadius: 99, border: `1px solid ${filt === c ? co.fg : "#cbd5e1"}`, background: filt === c ? co.col : "#fff", color: filt === c ? co.fg : T_MUTED, fontSize: 12.5, fontWeight: filt === c ? 700 : 400, cursor: "pointer" }}>{c === "All" ? "All sections" : co.label}</button>; })}</div>}
-    {xf && <Card s={{ marginBottom: 10, border: "2px solid #1e3a8a" }}><H2 t="Move Item" /><p style={{ fontSize: 13, margin: "0 0 11px" }}><b>{xf.name}</b> — currently in {catOf(xf.cat, cats).label}, at {xf.locs.map(l => l.name).join(", ")}</p>
-      <label style={{ ...LB, fontSize: 13 }}>Move to location</label><select value={xt} onChange={e => setXt(e.target.value)} style={IN}><option value="">Leave where it is</option>{d.invLocs.map(l => <option key={l}>{l}</option>)}</select>
-      <label style={{ ...LB, fontSize: 13, marginTop: 11 }}>Move to section</label><select value={xc} onChange={e => setXc(e.target.value)} style={IN}><option value="">Leave in {catOf(xf.cat, cats).label}</option>{xf.cat && <option value="_none">No section</option>}{cats.filter(c => c.k !== xf.cat).map(c => <option key={c.k} value={c.k}>{c.label}</option>)}</select>
+    <Card s={{ marginBottom: 10 }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><span style={{ fontWeight: 700, fontSize: 14 }}>Show items stored in</span><div style={{ display: "flex", gap: 10 }}><button onClick={() => setSel(viewLocs.map(l => l.id))} style={{ background: "none", border: "none", color: "#1e3a8a", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>All</button><button onClick={() => setSel([])} style={{ background: "none", border: "none", color: T_MUTED, fontSize: 13, cursor: "pointer" }}>None</button></div></div>
+      {!viewLocs.length ? <div style={{ fontSize: 13, color: T_MUTED }}>No locations set up yet.</div> :
+        (master ? TEAMS : [team]).map(t => { const ls = viewLocs.filter(l => l.team === t); if (!ls.length) return null; return (
+          <div key={t} style={{ marginBottom: 9 }}>
+            {master && <div style={{ marginBottom: 6 }}><TeamTag t={t} sm /></div>}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>{ls.map(l => { const on = sel.includes(l.id); const c = teamCol(l.team); const n = myItems.filter(i => (i.locs || []).some(x => x.id === l.id)).length; return (
+              <button key={l.id} onClick={() => setSel(p => on ? p.filter(x => x !== l.id) : [...p, l.id])} style={{ padding: "7px 13px", borderRadius: 99, border: `1.5px solid ${on ? c.dot : "#cbd5e1"}`, background: on ? c.dot : "#fff", color: on ? "#fff" : "#334155", fontSize: 13.5, fontWeight: on ? 700 : 500, cursor: "pointer" }}>{on ? "✓ " : ""}{l.name} ({n})</button>); })}</div>
+          </div>); })}</Card>
+
+    {usedCats.length > 1 && <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>{["All", ...usedCats].map(c => { const co = c === "All" ? { col: "#f3f4f6", fg: "#374151", label: "All sections" } : catOf(c, cats); return <button key={c || "none"} onClick={() => setFilt(c)} style={{ padding: "5px 11px", borderRadius: 99, border: `1px solid ${filt === c ? co.fg : "#cbd5e1"}`, background: filt === c ? co.col : "#fff", color: filt === c ? co.fg : T_MUTED, fontSize: 12.5, fontWeight: filt === c ? 700 : 400, cursor: "pointer" }}>{co.label}</button>; })}</div>}
+
+    {xf && <Card s={{ marginBottom: 10, border: "2px solid #1e3a8a" }}><H2 t="Move Item" />
+      <p style={{ fontSize: 13, margin: "0 0 11px" }}><b>{xf.name}</b> — {catOf(xf.cat, cats).label}, at {(xf.locs || []).map(l => locNm(d, l.id)).join(", ")}</p>
+      <label style={{ ...LB, fontSize: 13 }}>Move to location</label>
+      <select value={xt} onChange={e => setXt(e.target.value)} style={IN}><option value="">Leave where it is</option>
+        {(master ? TEAMS : [team]).map(t => { const ls = viewLocs.filter(l => l.team === t); return ls.length ? <optgroup key={t} label={t}>{ls.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}</optgroup> : null; })}</select>
+      {xt && locTm(d, xt) !== xf.team && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 6 }}>⚠ This hands the item over to {teamShort(locTm(d, xt))}.</div>}
+      <label style={{ ...LB, fontSize: 13, marginTop: 11 }}>Move to section</label>
+      <select value={xc} onChange={e => setXc(e.target.value)} style={IN}><option value="">Leave in {catOf(xf.cat, cats).label}</option>{xf.cat && <option value="_none">No section</option>}{cats.filter(c => c.k !== xf.cat).map(c => <option key={c.k} value={c.k}>{c.label}</option>)}</select>
       <div style={{ display: "flex", gap: 8, marginTop: 12 }}><Btn t="Move" on={move} sm /><Btn t="Cancel" on={() => { setXf(null); setXt(""); setXc(""); }} bg="#f3f4f6" fg="#374151" sm /></div></Card>}
-    {!d.items.length && <Empty t="No items registered yet — tap + Add" />}
-    {d.items.length > 0 && !sel.length && <Empty t="Choose one or more locations above to see your items" />}
+
+    {!myItems.length && <Empty t="No items registered yet — tap + Add" />}
+    {myItems.length > 0 && !sel.length && <Empty t="Choose one or more locations above to see your items" />}
     {sel.length > 0 && !Object.keys(grp).length && <Empty t="No items match your filters" />}
-    {Object.entries(grp).map(([l, its]) => <div key={l} style={{ marginBottom: 17 }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937", marginBottom: 7 }}>📍 {l} <span style={{ color: T_FAINT, fontWeight: 400 }}>({its.length})</span></div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{its.map(i => { const a = alertOf(i.expiry); const co = catOf(i.cat, cats); const here = i.locs.find(x => x.name === l); const shots = ph[i.pg] || []; return <Card key={i.id + l} s={{ padding: "10px 13px", borderLeft: `3px solid ${a ? a.br : "#e5e7eb"}` }}>
-        <div style={{ display: "flex", justifyContent: "space-between" }}><div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: 13.5 }}>{i.name} {i.dose && <span style={{ color: T_MUTED, fontWeight: 500 }}>{i.dose}</span>}</div>
-          <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={`Qty here: ${here?.qty ?? i.qty}`} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}{shots.length > 0 && <Tag t={`📷 ${shots.length}`} bg="#dcfce7" fg="#166534" />}</div>
-          {i.locs.length > 1 && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 3 }}>Also at: {i.locs.filter(x => x.name !== l).map(x => `${x.name} (${x.qty})`).join(", ")}</div>}
-          {shots.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 7, overflowX: "auto" }}>{shots.slice(0, 6).map(s => <img key={s.id} src={s.data} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 7, border: "1px solid #e2e8f0", flexShrink: 0 }} />)}</div>}</div>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>{a && <Tag t={`⚠ ${a.label}`} bg={a.bg} fg={a.fg} />}
-            <div style={{ display: "flex", gap: 5 }}><button onClick={() => { setXf(i); setXt(""); setXc(""); }} style={{ background: "#eff6ff", border: "none", borderRadius: 7, padding: "4px 9px", cursor: "pointer", color: "#1e3a8a", fontWeight: 700 }}>→</button><button onClick={() => del(i)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer" }}>🗑</button></div></div></div></Card>; })}</div>
-    </div>)}
+    {Object.entries(grp).map(([id, its]) => { const l = locById(d, id); const c = teamCol(l?.team); return (<div key={id} style={{ marginBottom: 17 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937", marginBottom: 7, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>📍 {l?.name} <span style={{ color: T_FAINT, fontWeight: 400 }}>({its.length})</span>{master && <TeamTag t={l?.team} sm />}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{its.map(i => { const a = alertOf(i.expiry); const co = catOf(i.cat, cats); const here = (i.locs || []).find(x => x.id === id); const shots = ph[i.pg] || []; return (
+        <Card key={i.id + id} s={{ padding: "10px 13px", borderLeft: `3px solid ${a ? a.br : c.dot}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}><div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 13.5 }}>{i.name} {i.dose && <span style={{ color: T_MUTED, fontWeight: 500 }}>{i.dose}</span>}</div>
+            <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={`Qty here: ${here?.qty ?? i.qty}`} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}{shots.length > 0 && <Tag t={`📷 ${shots.length}`} bg="#dcfce7" fg="#166534" />}</div>
+            {(i.locs || []).length > 1 && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 3 }}>Also at: {i.locs.filter(x => x.id !== id).map(x => `${locNm(d, x.id)} (${x.qty})`).join(", ")}</div>}
+            {shots.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 7, overflowX: "auto" }}>{shots.slice(0, 6).map(sh => <img key={sh.id} src={sh.data} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 7, border: "1px solid #e2e8f0", flexShrink: 0 }} />)}</div>}</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>{a && <Tag t={`⚠ ${a.label}`} bg={a.bg} fg={a.fg} />}
+              <div style={{ display: "flex", gap: 5 }}><button onClick={() => { setXf(i); setXt(""); setXc(""); }} style={{ background: "#eff6ff", border: "none", borderRadius: 7, padding: "4px 9px", cursor: "pointer", color: "#1e3a8a", fontWeight: 700 }}>→</button><button onClick={() => del(i)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer" }}>🗑</button></div></div></div></Card>); })}</div>
+    </div>); })}
   </div>);
 }
 
-/* Sections — add and remove your own categories */
+/* Sections — optional groupings, shared across teams */
 function Sections({ d, up, say }) {
   const cats = catsOf(d);
   const [n, setN] = useState(""); const [cf, setCf] = useState(null);
@@ -989,9 +1162,9 @@ function Sections({ d, up, say }) {
     setN(""); say(`"${t}" added`);
   };
   const rm = k => { up(x => ({ ...x, cats: catsOf(x).filter(c => c.k !== k) })); setCf(null); say("Section removed"); };
-  return (<div><H1 t="Sections" />
-    <Card s={{ marginBottom: 13 }}><H2 t="Add Section" /><div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK Kit" /><Btn t="Add" on={add} sm /></div>
-      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>Sections are optional — they group items on the dashboard, in the register and at audit. You can also add one straight from the Section dropdown while adding an item. A section holding items can't be removed until you move those items out.</div></Card>
+  return (<div><H2 t="Sections" />
+    <Card s={{ marginBottom: 13 }}><div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Strapping, Nutrition, GK kit" /><Btn t="Add" on={add} sm /></div>
+</Card>
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{cats.map(c => { const n2 = count(c.k); return <Card key={c.k} s={{ padding: "11px 14px", borderLeft: `4px solid ${c.fg}` }}>
       {cf === c.k ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>Remove "{c.label}"?</span><div style={{ display: "flex", gap: 7 }}><Btn t="Remove" on={() => rm(c.k)} bg="#dc2626" sm /><Btn t="Cancel" on={() => setCf(null)} bg="#f3f4f6" fg="#374151" sm /></div></div>
         : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1001,59 +1174,92 @@ function Sections({ d, up, say }) {
   </div>);
 }
 
-function Expiry({ d }) {
-  const list = d.items.map(i => ({ ...i, a: alertOf(i.expiry) })).filter(i => i.a).sort((x, y) => dLeft(x.expiry) - dLeft(y.expiry));
+function Expiry({ d, team, master }) {
+  const list = d.items.filter(i => master || i.team === team).map(i => ({ ...i, a: alertOf(i.expiry) })).filter(i => i.a).sort((x, y) => dLeft(x.expiry) - dLeft(y.expiry));
   return (<div><H1 t="Expiry Alerts" />
     <div style={{ display: "flex", gap: 7, marginBottom: 15, flexWrap: "wrap" }}>{LEVELS.map(l => <div key={l.label} style={{ background: l.bg, border: `1px solid ${l.br}`, color: l.fg, borderRadius: 9, padding: "6px 11px", fontSize: 12, fontWeight: 600 }}>{l.label}: {list.filter(i => i.a.label === l.label).length}</div>)}</div>
     {!list.length && <Empty t="No expiry alerts — all items within date" />}
-    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{list.map(i => <Card key={i.id} s={{ borderLeft: `4px solid ${i.a.br}`, background: i.a.bg }}><div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 700, fontSize: 14 }}>{i.name} {i.dose}</div><div style={{ fontSize: 12, color: "#374151", marginTop: 3 }}>📍 {i.locs.map(l => `${l.name} (${l.qty})`).join(", ")} · Expires {fmtD(i.expiry)}</div><div style={{ fontSize: 11, color: T_MUTED }}>Batch: {i.batch || "—"}</div></div><div style={{ textAlign: "right" }}><div style={{ fontSize: 22, fontWeight: 800, color: i.a.fg }}>{Math.abs(dLeft(i.expiry))}</div><div style={{ fontSize: 10, color: i.a.fg }}>{dLeft(i.expiry) < 0 ? "days ago" : dLeft(i.expiry) === 0 ? "today" : "days"}</div></div></div></Card>)}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{list.map(i => <Card key={i.id} s={{ borderLeft: `4px solid ${i.a.br}`, background: i.a.bg }}><div style={{ display: "flex", justifyContent: "space-between" }}><div>
+      <div style={{ fontWeight: 700, fontSize: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{i.name} {i.dose}{master && <TeamTag t={i.team} sm />}</div>
+      <div style={{ fontSize: 12, color: "#374151", marginTop: 3 }}>📍 {(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ")} · Expires {fmtD(i.expiry)}</div>
+      <div style={{ fontSize: 11, color: T_MUTED }}>Batch: {i.batch || "—"}</div></div>
+      <div style={{ textAlign: "right" }}><div style={{ fontSize: 22, fontWeight: 800, color: i.a.fg }}>{Math.abs(dLeft(i.expiry))}</div><div style={{ fontSize: 10, color: i.a.fg }}>{dLeft(i.expiry) < 0 ? "days ago" : dLeft(i.expiry) === 0 ? "today" : "days"}</div></div></div></Card>)}</div>
   </div>);
 }
 
-function Orders({ d, up, say }) {
+function Orders({ d, up, team, master, say }) {
   const [e, setE] = useState(""); const [n, setN] = useState("");
-  const pend = d.orders.filter(o => !o.done);
-  const exp = () => { const txt = ["ORDER", `Date: ${fmtDT(nowISO())}`, "", ...pend.map(o => `- ${o.name} (${o.loc}, expires ${fmtD(o.expiry)}, ${o.lvl} alert)`), "", `Total: ${pend.length}`].join("\n"); const a = document.createElement("a"); a.href = "data:text/plain;charset=utf-8," + encodeURIComponent(txt); a.download = "order.txt"; a.click(); say("Exported"); };
+  const mine = d.orders.filter(o => master || o.team === team);
+  const pend = mine.filter(o => !o.done);
+  const exp = () => { const txt = ["ORDER", `Date: ${fmtDT(nowISO())}`, "", ...pend.map(o => `- ${o.name} (${teamShort(o.team)} · ${o.loc}, expires ${fmtD(o.expiry)}, ${o.lvl} alert)`), "", `Total: ${pend.length}`].join("\n"); const a = document.createElement("a"); a.href = "data:text/plain;charset=utf-8," + encodeURIComponent(txt); a.download = "order.txt"; a.click(); say("Exported"); };
   const mail = () => { if (!e) return say("Enter supplier email", "error"); window.open(`mailto:${e}?subject=${encodeURIComponent("Equipment Order")}&body=${encodeURIComponent(`Dear ${n || "Supplier"},\n\n${pend.map(o => `- ${o.name} (${o.loc})`).join("\n")}\n\nKind regards`)}`); };
   return (<div><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 13 }}><H1 t="Order List" /><span style={{ fontSize: 12, color: T_MUTED }}>{pend.length} pending</span></div>
     <Card s={{ marginBottom: 13 }}><H2 t="Supplier Details" /><div style={{ display: "flex", flexDirection: "column", gap: 10 }}><Field label="Supplier Name" value={n} onChange={ev => setN(ev.target.value)} placeholder="e.g. Alliance Healthcare" /><Field label="Supplier Email" type="email" value={e} onChange={ev => setE(ev.target.value)} placeholder="orders@supplier.com" /><div style={{ display: "flex", gap: 8 }}><Btn t="Export" on={exp} bg="#f3f4f6" fg="#374151" sm /><Btn t="📧 Send Email" on={mail} sm /></div></div></Card>
-    {!d.orders.length && <Empty t="No items in order list — added automatically as items approach expiry" />}
-    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{d.orders.map(o => <Card key={o.id} s={{ opacity: o.done ? .5 : 1, borderLeft: `3px solid ${o.done ? "#e5e7eb" : "#f59e0b"}` }}><div style={{ display: "flex", justifyContent: "space-between" }}><div><div style={{ fontWeight: 600, fontSize: 14 }}>{o.name}</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 2 }}>📍 {o.loc} · Exp {fmtD(o.expiry)}</div><div style={{ marginTop: 5 }}><Tag t={`${o.lvl} alert`} bg="#fef3c7" fg="#92400e" /></div></div><div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>{!o.done && <Btn t="✓ Done" on={() => up(x => ({ ...x, orders: x.orders.map(y => y.id === o.id ? { ...y, done: true } : y) }))} bg="#16a34a" sm />}<button onClick={() => { up(x => ({ ...x, orders: x.orders.filter(y => y.id !== o.id) })); say("Removed"); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14 }}>🗑</button></div></div></Card>)}</div>
+    {!mine.length && <Empty t="No items in order list — added automatically as items approach expiry" />}
+    <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{mine.map(o => <Card key={o.id} s={{ opacity: o.done ? .5 : 1, borderLeft: `3px solid ${o.done ? "#e5e7eb" : "#f59e0b"}` }}><div style={{ display: "flex", justifyContent: "space-between" }}><div>
+      <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{o.name}{master && <TeamTag t={o.team} sm />}</div>
+      <div style={{ fontSize: 12, color: T_MUTED, marginTop: 2 }}>📍 {o.loc} · Exp {fmtD(o.expiry)}</div><div style={{ marginTop: 5 }}><Tag t={`${o.lvl} alert`} bg="#fef3c7" fg="#92400e" /></div></div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5, alignItems: "flex-end" }}>{!o.done && <Btn t="✓ Done" on={() => up(x => ({ ...x, orders: x.orders.map(y => y.id === o.id ? { ...y, done: true } : y) }))} bg="#16a34a" sm />}<button onClick={() => { up(x => ({ ...x, orders: x.orders.filter(y => y.id !== o.id) })); say("Removed"); }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14 }}>🗑</button></div></div></Card>)}</div>
   </div>);
 }
 
-function Hist({ d }) {
+function Hist({ d, team, master }) {
   const [sort, setSort] = useState("new"); const [sel, setSel] = useState([]); const [op, setOp] = useState(null);
-  const locs = [...new Set(d.checks.map(c => c.loc))];
-  let cs = [...d.checks]; if (sel.length) cs = cs.filter(c => sel.includes(c.loc));
-  cs.sort((a, b) => sort === "new" ? new Date(b.at) - new Date(a.at) : sort === "old" ? new Date(a.at) - new Date(b.at) : sort === "name" ? a.by.localeCompare(b.by) : sort === "loc" ? a.loc.localeCompare(b.loc) : sort === "mm" ? (b.mm?.length || 0) - (a.mm?.length || 0) : b.n - a.n);
+  const all = d.checks.filter(c => master || c.team === team);
+  const locs = [...new Set(all.map(c => c.loc))];
+  let cs = [...all]; if (sel.length) cs = cs.filter(c => sel.includes(c.loc));
+  cs.sort((a, b) => sort === "new" ? new Date(b.at) - new Date(a.at) : sort === "old" ? new Date(a.at) - new Date(b.at) : sort === "name" ? a.by.localeCompare(b.by) : sort === "loc" ? (a.loc || "").localeCompare(b.loc || "") : sort === "mm" ? (b.mm?.length || 0) - (a.mm?.length || 0) : b.n - a.n);
   const elTxt = el => el ? KINDS.filter(k => el[k.k]).map(k => k.label.split(" /")[0]).join(", ") : "";
   return (<div><H1 t="Audit History" />
     <Card s={{ marginBottom: 13 }}><label style={LB}>Sort by</label><select value={sort} onChange={e => setSort(e.target.value)} style={IN}><option value="new">Newest first</option><option value="old">Oldest first</option><option value="name">Staff name</option><option value="loc">Location</option><option value="items">Most items</option><option value="mm">Mismatches first</option></select>
       {locs.length > 0 && <div style={{ marginTop: 11 }}><label style={LB}>Filter by location</label><div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>{locs.map(l => { const on = sel.includes(l); return <button key={l} onClick={() => setSel(p => on ? p.filter(x => x !== l) : [...p, l])} style={{ padding: "5px 11px", borderRadius: 99, border: `1px solid ${on ? "#1e3a8a" : "#cbd5e1"}`, background: on ? "#eff6ff" : "#fff", color: on ? "#1e3a8a" : T_MUTED, fontSize: 12, cursor: "pointer" }}>{l}</button>; })}</div></div>}</Card>
     {!cs.length && <Empty t="No completed audits yet" />}
     <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{cs.map(c => <Card key={c.id}>
-      <div onClick={() => setOp(op === c.id ? null : c.id)} style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }}><div><div style={{ fontWeight: 600, fontSize: 14 }}>{c.loc}</div><div style={{ fontSize: 12, color: T_MUTED, marginTop: 2 }}>{fmtDT(c.at)} · {c.by}</div>{c.mm?.length > 0 && <div style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 2 }}>⚠ {c.mm.length} mismatch{c.mm.length !== 1 ? "es" : ""}</div>}</div><div style={{ textAlign: "right" }}><Tag t={`${c.n} items`} bg="#dbeafe" fg="#1e40af" /><div style={{ fontSize: 10, color: T_FAINT, marginTop: 4 }}>{op === c.id ? "▲" : "▼"}</div></div></div>
+      <div onClick={() => setOp(op === c.id ? null : c.id)} style={{ display: "flex", justifyContent: "space-between", cursor: "pointer" }}><div>
+        <div style={{ fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>{c.loc}{master && <TeamTag t={c.team} sm />}</div>
+        <div style={{ fontSize: 12, color: T_MUTED, marginTop: 2 }}>{fmtDT(c.at)} · {c.by}</div>{c.mm?.length > 0 && <div style={{ fontSize: 11, color: "#d97706", fontWeight: 600, marginTop: 2 }}>⚠ {c.mm.length} mismatch{c.mm.length !== 1 ? "es" : ""}</div>}</div>
+        <div style={{ textAlign: "right" }}><Tag t={`${c.n} items`} bg="#dbeafe" fg="#1e40af" /><div style={{ fontSize: 10, color: T_FAINT, marginTop: 4 }}>{op === c.id ? "▲" : "▼"}</div></div></div>
       {op === c.id && <div style={{ marginTop: 12, borderTop: "1px solid #f3f4f6", paddingTop: 11 }}>{c.mm?.length > 0 && <div style={{ background: "#fffbeb", border: "1px solid #fde047", borderRadius: 8, padding: "8px 11px", marginBottom: 9 }}>{c.mm.map((m, i) => <div key={i} style={{ fontSize: 12, color: "#78350f" }}>• {m.name} — expected {m.exp}, counted {m.act} ({m.act - m.exp > 0 ? "+" : ""}{m.act - m.exp})</div>)}</div>}
         {c.items.map((i, k) => <div key={k} style={{ padding: "7px 0", borderBottom: "1px solid #f9fafb", fontSize: 12 }}><div style={{ display: "flex", justifyContent: "space-between" }}><span>{i.name} {i.dose} <span style={{ color: T_FAINT }}>· Counted: {i.entered}{i.used != null && i.used !== 0 ? ` · ${i.used > 0 ? i.used + " used" : -i.used + " added"}` : ""}</span></span><span style={{ color: T_MUTED }}>{fmtD(i.expiry)}</span></div>{i.el && <div style={{ fontSize: 10.5, color: "#166534", marginTop: 2 }}>✓ Verified: {elTxt(i.el)}</div>}</div>)}</div>}
     </Card>)}</div>
   </div>);
 }
 
-function Locs({ d, up, say }) {
-  const [n, setN] = useState(""); const [ed, setEd] = useState(null); const [ev, setEv] = useState(""); const [cf, setCf] = useState(null);
-  const add = () => { if (!n.trim()) return say("Enter a name", "error"); if (d.invLocs.some(l => l.toLowerCase() === n.trim().toLowerCase())) return say("Already exists", "error"); up(x => ({ ...x, invLocs: [...x.invLocs, n.trim()] })); setN(""); say("Location added"); };
-  const sv = () => { if (!ev.trim()) return say("Cannot be empty", "error"); const old = d.invLocs[ed]; up(x => ({ ...x, invLocs: x.invLocs.map((l, i) => i === ed ? ev.trim() : l), items: x.items.map(i => ({ ...i, locs: i.locs.map(l => l.name === old ? { ...l, name: ev.trim() } : l) })) })); setEd(null); say("Updated"); };
-  const rm = l => { up(x => ({ ...x, invLocs: x.invLocs.filter(y => y !== l), items: x.items.map(i => ({ ...i, locs: i.locs.filter(y => y.name !== l) })).filter(i => i.locs.length) })); setCf(null); say("Removed"); };
-  return (<div><H1 t="Locations" />
-    <Card s={{ marginBottom: 13 }}><H2 t="Add Location" /><div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Treatment room cabinet" /><Btn t="Add" on={add} sm /></div>
-      <div style={{ fontSize: 13, color: T_MUTED, marginTop: 9 }}>These are the places you actually keep stock. Nothing is pre-set — add your own.</div></Card>
-    {!d.invLocs.length && <Empty t="No locations yet — add your first above" />}
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{d.invLocs.map((l, i) => <Card key={l} s={{ padding: "11px 14px" }}>
-      {ed === i ? <div style={{ display: "flex", gap: 7 }}><input value={ev} onChange={e => setEv(e.target.value)} style={{ ...IN, flex: 1 }} autoFocus /><Btn t="✓" on={sv} sm /><Btn t="✕" on={() => setEd(null)} bg="#f3f4f6" fg="#374151" sm /></div>
-        : cf === l ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>Remove "{l}"?</span><div style={{ display: "flex", gap: 7 }}><Btn t="Remove" on={() => rm(l)} bg="#dc2626" sm /><Btn t="Cancel" on={() => setCf(null)} bg="#f3f4f6" fg="#374151" sm /></div></div>
-          : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div style={{ fontSize: 14.5 }}>📍 <b style={{ fontWeight: 600 }}>{l}</b> <span style={{ fontSize: 12, color: T_FAINT }}>({d.items.filter(x => x.locs.some(y => y.name === l)).length})</span></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => { setEd(i); setEv(l); }} style={{ background: "#f3f4f6", border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer" }}>✏️</button><button onClick={() => setCf(l)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer" }}>🗑</button></div></div>}
-    </Card>)}</div>
+/* Setup — storage locations, owned by a team */
+function Locs({ d, up, team, master, say }) {
+  const [n, setN] = useState(""); const [nt, setNt] = useState(master ? "" : team);
+  const [ed, setEd] = useState(null); const [ev, setEv] = useState(""); const [cf, setCf] = useState(null);
+  useEffect(() => { if (!master) setNt(team); }, [team, master]);
+  const shown = (d.invLocs || []).filter(l => master || l.team === team);
+  const count = id => d.items.filter(i => (i.locs || []).some(x => x.id === id)).length;
+  const add = () => {
+    if (!nt) return say("Choose which team this location belongs to", "error");
+    if (!n.trim()) return say("Enter a name", "error");
+    if ((d.invLocs || []).some(l => l.team === nt && l.name.toLowerCase() === n.trim().toLowerCase())) return say(`${teamShort(nt)} already has a location with that name`, "error");
+    up(x => ({ ...x, invLocs: [...(x.invLocs || []), { id: uid(), name: n.trim(), team: nt }] }));
+    setN(""); say(`Added to ${teamShort(nt)}`);
+  };
+  const sv = id => { if (!ev.trim()) return say("Cannot be empty", "error"); up(x => ({ ...x, invLocs: x.invLocs.map(l => l.id === id ? { ...l, name: ev.trim() } : l) })); setEd(null); say("Updated"); };
+  const rm = id => { up(x => ({ ...x, invLocs: x.invLocs.filter(l => l.id !== id), items: x.items.map(i => ({ ...i, locs: (i.locs || []).filter(l => l.id !== id) })).filter(i => (i.locs || []).length) })); setCf(null); say("Removed"); };
+
+  return (<div><H1 t="Setup" />
+    <H2 t="Storage Locations" />
+    <Card s={{ marginBottom: 13 }}>
+      {master && <div style={{ marginBottom: 10 }}><label style={LB}>Team</label>
+        <select value={nt} onChange={e => setNt(e.target.value)} style={{ ...IN, background: nt ? teamCol(nt).bg : "#fff", color: nt ? teamCol(nt).fg : "#000", fontWeight: 700 }}>
+          <option value="">Choose a team…</option>{TEAMS.map(t => <option key={t} value={t}>{t}</option>)}</select></div>}
+      <div style={{ display: "flex", gap: 8 }}><input value={n} onChange={e => setN(e.target.value)} onKeyDown={e => e.key === "Enter" && add()} style={{ ...IN, flex: 1 }} placeholder="e.g. Treatment room cabinet" /><Btn t="Add" on={add} sm /></div>
+</Card>
+    {!shown.length && <Empty t={master ? "No locations for any team yet" : `No locations for ${team} yet — add your first above`} />}
+    {(master ? TEAMS : [team]).map(t => { const ls = shown.filter(l => l.team === t); if (!ls.length) return null; const c = teamCol(t); return (
+      <div key={t} style={{ marginBottom: 15 }}>
+        {master && <div style={{ marginBottom: 7 }}><TeamTag t={t} /></div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{ls.map(l => <Card key={l.id} s={{ padding: "11px 14px", borderLeft: `4px solid ${c.dot}` }}>
+          {ed === l.id ? <div style={{ display: "flex", gap: 7 }}><input value={ev} onChange={e => setEv(e.target.value)} style={{ ...IN, flex: 1 }} autoFocus /><Btn t="✓" on={() => sv(l.id)} sm /><Btn t="✕" on={() => setEd(null)} bg="#f3f4f6" fg="#374151" sm /></div>
+            : cf === l.id ? <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><span style={{ fontSize: 13, color: "#991b1b", fontWeight: 500 }}>Remove "{l.name}"?</span><div style={{ display: "flex", gap: 7 }}><Btn t="Remove" on={() => rm(l.id)} bg="#dc2626" sm /><Btn t="Cancel" on={() => setCf(null)} bg="#f3f4f6" fg="#374151" sm /></div></div>
+              : <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div style={{ fontSize: 14.5 }}>📍 <b style={{ fontWeight: 600 }}>{l.name}</b> <span style={{ fontSize: 12, color: T_FAINT }}>({count(l.id)})</span></div><div style={{ display: "flex", gap: 6 }}><button onClick={() => { setEd(l.id); setEv(l.name); }} style={{ background: "#f3f4f6", border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer" }}>✏️</button><button onClick={() => setCf(l.id)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "5px 9px", cursor: "pointer" }}>🗑</button></div></div>}
+        </Card>)}</div>
+      </div>); })}
   </div>);
 }
 
@@ -1073,7 +1279,6 @@ function Approvals({ d, up, user, say, rec }) {
   };
   const reject = u => { up(x => rec({ ...x, pending: x.pending.filter(p => p.id !== u.id) }, "USER_REJECTED", `${user.name} rejected ${u.name}`, "-")); say("Registration rejected"); };
   return (<div><H1 t="Pending Approvals" />
-    <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "11px 14px", fontSize: 12, color: "#1e40af", marginBottom: 15 }}>{isAdmin ? "Assign each user to one or more teams. They only see data for teams you grant." : "You can approve staff for your own teams only."}</div>
     {!queue.length && <Empty t="No registrations awaiting approval" />}
     <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>{queue.map(u => {
       const role = edits[u.id]?.role ?? u.requestedRole; const teams = edits[u.id]?.teams ?? u.teams;
@@ -1127,15 +1332,18 @@ function Branding({ d, up, user, say, ph, setPh }) {
   return (<div><H1 t="Club Branding" />
     <Card s={{ marginBottom: 13, borderLeft: `4px solid ${medOn ? "#16a34a" : "#94a3b8"}` }}><H2 t="Modules" />
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div><div style={{ fontSize: 15, fontWeight: 600 }}>💊 Medication module</div><div style={{ fontSize: 13, color: T_MUTED, marginTop: 3 }}>Dispensing, pill counts, requests and pharmacist orders. Hidden for everyone while it's off — your data is kept.</div></div>
+        <div><div style={{ fontSize: 15, fontWeight: 600 }}>💊 Medication module</div></div>
         <Btn t={medOn ? "On" : "Off"} on={() => { up(x => ({ ...x, modules: { ...(x.modules || {}), med: !medOn } })); say(medOn ? "Medication module hidden" : "Medication module enabled"); }} bg={medOn ? "#16a34a" : "#94a3b8"} sm /></div></Card>
     <Card s={{ marginBottom: 13 }}><H2 t="Club Logo" />
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
         <Logo d={d} size={70} />
         <div style={{ flex: 1 }}><input type="file" accept="image/*" ref={fr} onChange={upload} style={{ display: "none" }} /><Btn t="Upload Logo" on={() => fr.current.click()} sm />
-          {d.logo?.startsWith?.("data:") && <div style={{ marginTop: 7 }}><button onClick={() => { up(x => ({ ...x, logo: "⚽" })); say("Logo reset"); }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>Remove logo</button></div>}</div></div>
+          {d.logo?.startsWith?.("data:") && <div style={{ marginTop: 7 }}><button onClick={() => { up(x => ({ ...x, logo: "mark" })); say("Logo reset"); }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>Remove logo</button></div>}</div></div>
       <label style={LB}>Or choose an icon</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{["⚽", "🦅", "🏥", "💊", "🩺", "🏉", "🏀", "⚕️"].map(x => <button key={x} onClick={() => { up(y => ({ ...y, logo: x })); say("Icon set"); }} style={{ width: 42, height: 42, fontSize: 21, borderRadius: 11, border: `2px solid ${d.logo === x ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === x ? "#eff6ff" : "#fff", cursor: "pointer" }}>{x}</button>)}</div></Card>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center" }}>
+        <button onClick={() => { up(y => ({ ...y, logo: "mark" })); say("Default mark set"); }} title="Sports Stock mark"
+          style={{ width: 42, height: 42, borderRadius: 11, border: `2px solid ${d.logo === "mark" || d.logo === "⚽" ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === "mark" || d.logo === "⚽" ? "#eff6ff" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e3a8a" }}><Mark size={24} /></button>
+        {["🦅", "🏥", "💊", "🩺", "🏉", "🏀", "⚕️"].map(x => <button key={x} onClick={() => { up(y => ({ ...y, logo: x })); say("Icon set"); }} style={{ width: 42, height: 42, fontSize: 21, borderRadius: 11, border: `2px solid ${d.logo === x ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === x ? "#eff6ff" : "#fff", cursor: "pointer" }}>{x}</button>)}</div></Card>
     <Card s={{ marginBottom: 13 }}><H2 t="Club Name" /><div style={{ display: "flex", gap: 8 }}><input value={name} onChange={e => setName(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="Crystal Palace FC" /><Btn t="Save" on={() => { up(x => ({ ...x, clubName: name })); say("Club name updated"); }} sm /></div></Card>
     <Card><H2 t="Item Photos" /><p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 11px" }}>{photoCount} photo{photoCount !== 1 ? "s" : ""} stored on this device. Photos are the largest thing the app keeps — clear them if storage fills up. Item records are not affected.</p>
       <Btn t="Delete all item photos" on={() => { if (!photoCount) return say("No photos stored", "warn"); setPh({}); say("All item photos deleted"); }} bg="#fee2e2" fg="#991b1b" sm /></Card>
@@ -1172,12 +1380,12 @@ function Backup({ d, up, user, say }) {
   const pushSnapshot = async () => {
     if (!sync.enabled) return say("Connect SharePoint first", "error");
     setPushing(true);
-    const rows = [...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, expiry: m.expiry, batch: "", team: m.team })), ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: i.locs.map(l => `${l.name} (${l.qty})`).join("; "), qty: i.qty, expiry: i.expiry, batch: i.batch || "", team: "-" }))];
+    const rows = [...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, expiry: m.expiry, batch: "", team: m.team })), ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: (i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join("; "), qty: i.qty, expiry: i.expiry, batch: i.batch || "", team: i.team || "-" }))];
     try { await post(rows, "snapshot"); setSync({ lastAt: nowISO() }); say(`${rows.length} stock rows sent`); }
     catch { say("Sync failed", "error"); } finally { setPushing(false); }
   };
   const csv = () => { const rows = [["Timestamp", "User", "Role", "Team", "Action", "Detail"]]; d.ledger.forEach(l => rows.push([l.ts, l.user, l.role, l.team, l.action, `"${(l.detail || "").replace(/"/g, "'")}"`])); dl(rows, `Ledger-${new Date().toISOString().split("T")[0]}.csv`); say("Ledger exported"); };
-  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Expiry", "Batch"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, m.expiry, ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${i.locs.map(l => `${l.name} (${l.qty})`).join(", ")}"`, i.qty, i.expiry, i.batch || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
+  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Expiry", "Batch", "Team"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, m.expiry, "", m.team || ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ")}"`, i.qty, i.expiry, i.batch || "", i.team || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
   const unsynced = d.ledger.length - (sync.lastCount || 0);
   const recent = [...d.ledger].reverse().slice(0, 15);
 
@@ -1185,8 +1393,7 @@ function Backup({ d, up, user, say }) {
     <Card s={{ marginBottom: 13, borderLeft: `4px solid ${sync.enabled ? "#16a34a" : "#94a3b8"}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}><H2 t="SharePoint Sync" /><Tag t={sync.enabled ? "● Connected" : "○ Not connected"} bg={sync.enabled ? "#dcfce7" : "#f3f4f6"} fg={sync.enabled ? "#166534" : "#374151"} /></div>
       {!isAdmin ? <p style={{ fontSize: 13, color: T_MUTED, margin: 0 }}>Only a Super Admin can configure SharePoint sync.</p> : <>
-        <p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 12px", lineHeight: 1.5 }}>Connect a Power Automate flow so every change is written to an Excel file in the club's SharePoint.</p>
-        <label style={LB}>Power Automate HTTP URL</label>
+                <label style={LB}>Power Automate HTTP URL</label>
         <input value={url} onChange={e => setUrl(e.target.value)} style={{ ...IN, fontSize: 13, fontFamily: "monospace" }} placeholder="https://prod-00.uksouth.logic.azure.com/workflows/..." />
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}><Btn t={testing ? "⏳ Testing…" : "🔗 Test & Connect"} on={test} dis={testing} sm />{sync.enabled && <Btn t="Disconnect" on={() => { setSync({ enabled: false }); say("Disconnected"); }} bg="#f3f4f6" fg="#374151" sm />}</div>
         {sync.enabled && <><div style={{ marginTop: 13, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "11px 13px" }}>
@@ -1224,9 +1431,9 @@ function Backup({ d, up, user, say }) {
           <div style={{ marginTop: 12, background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 9, padding: "10px 12px", color: "#1e40af" }}><b>Tip for IT:</b> branch on <code>type</code> — route <code>ledger</code> to LedgerTable (append only) and <code>snapshot</code> to SnapshotTable (clear then append).</div>
         </div>}</>}
     </Card>
-    <Card s={{ marginBottom: 13 }}><H2 t="Manual Export" /><p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 12px" }}>Download an offline copy at any time.</p>
+    <Card s={{ marginBottom: 13 }}><H2 t="Manual Export" />
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}><Btn t="📊 Full Ledger" on={csv} bg="#f3f4f6" fg="#374151" sm /><Btn t="📦 Stock Snapshot" on={snap} bg="#f3f4f6" fg="#374151" sm /></div>
-      <div style={{ fontSize: 12, color: T_MUTED, marginTop: 10 }}>Note: item photos are not included in CSV exports — they stay on this device until you move to a hosted database.</div></Card>
+</Card>
     <Card><H2 t={`Recent Activity (${d.ledger.length} entries)`} />{!recent.length && <Empty t="No activity yet" />}
       {recent.map(l => <div key={l.id} style={{ padding: "9px 0", borderBottom: "1px solid #f3f4f6" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}><div style={{ flex: 1 }}><Tag t={l.action} /><div style={{ fontSize: 12, color: "#374151", marginTop: 4 }}>{l.detail}</div><div style={{ fontSize: 10.5, color: T_FAINT, marginTop: 2 }}>{l.user} · {l.role}</div></div><div style={{ fontSize: 10, color: T_FAINT, whiteSpace: "nowrap" }}>{fmtDT(l.ts)}</div></div></div>)}</Card>
   </div>);
