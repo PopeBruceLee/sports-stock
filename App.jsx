@@ -192,9 +192,35 @@ const Btn = ({ t, on, bg = "#1e3a8a", fg = "#fff", full, sm, dis }) => <button o
 const Field = ({ label, hint, ...p }) => <div><label style={LB}>{label}</label><input style={IN} {...p} />{hint && <div style={{ fontSize: 13.5, color: T_MUTED, marginTop: 5 }}>{hint}</div>}</div>;
 const H1 = ({ t }) => <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 17, color: "#0f172a" }}>{t}</div>;
 const H2 = ({ t }) => <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 13, color: "#0f172a" }}>{t}</div>;
+/* Sports Stock mark — a football reduced to a solid disc with the panel and
+   seams knocked out. Masked rather than drawn, so the cut-outs stay transparent
+   and it sits on any background. currentColor drives the fill. */
+let markN = 0;
+const Mark = ({ size = 40, style }) => {
+  const id = useRef(`ssm${++markN}`).current;
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} style={{ display: "block", color: "inherit", ...style }} aria-hidden="true">
+      <defs><mask id={id}>
+        <rect width="64" height="64" fill="#000" />
+        <circle cx="32" cy="32" r="30" fill="#fff" />
+        <polygon points="32,21 42.46,28.6 38.47,40.9 25.53,40.9 21.54,28.6" fill="#000" />
+        <g stroke="#000" strokeWidth="5" strokeLinecap="round">
+          <line x1="32" y1="21" x2="32" y2="7" />
+          <line x1="42.46" y1="28.6" x2="55.78" y2="24.27" />
+          <line x1="38.47" y1="40.9" x2="46.69" y2="52.23" />
+          <line x1="25.53" y1="40.9" x2="17.31" y2="52.23" />
+          <line x1="21.54" y1="28.6" x2="8.22" y2="24.27" />
+        </g>
+      </mask></defs>
+      <rect width="64" height="64" fill="currentColor" mask={`url(#${id})`} />
+    </svg>
+  );
+};
+
 const Logo = ({ d, size = 54 }) => d.logo?.startsWith?.("data:")
   ? <img src={d.logo} alt="" style={{ width: size, height: size, borderRadius: size * .27, objectFit: "cover", background: "#fff", border: "1px solid #e5e7eb" }} />
-  : <div style={{ width: size, height: size, background: "#1e3a8a", borderRadius: size * .27, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * .48 }}>{d.logo || "⚽"}</div>;
+  : <div style={{ width: size, height: size, background: "#1e3a8a", borderRadius: size * .27, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: size * .48, color: "#fff" }}>
+      {(!d.logo || d.logo === "mark" || d.logo === "⚽") ? <Mark size={size * .62} /> : d.logo}</div>;
 
 /* Older saves stored invLocs as plain strings with no team. Convert them once:
    every existing location and item is assigned to the first team, and item
@@ -214,7 +240,7 @@ const migrate = x => {
   };
 };
 
-const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "⚽", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
+const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
 
 /* ── PHOTO BLOCK ──────────────────────────────────────────── */
 /* Used when adding an item and again during audit. One or more photos per
@@ -335,10 +361,10 @@ function Login({ d, setUser, setPage, say }) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 380 }}>
-        <div style={{ textAlign: "center", marginBottom: 26 }}>
-          <div style={{ marginBottom: 12 }}><Logo d={d} /></div>
-          <div style={{ fontSize: 11, letterSpacing: 2, color: T_FAINT, textTransform: "uppercase", fontWeight: 600 }}>{d.clubName}</div>
-          <div style={{ fontSize: 25, fontWeight: 700, marginTop: 3 }}>Sports Stock App</div>
+        <div style={{ textAlign: "center", marginBottom: 30 }}>
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}><Logo d={d} size={76} /></div>
+          <div style={{ fontSize: 30, fontWeight: 700, letterSpacing: -0.6, color: "#0f172a", lineHeight: 1.1 }}>Sports Stock</div>
+          <div style={{ fontSize: 11.5, letterSpacing: 2.2, color: T_FAINT, textTransform: "uppercase", fontWeight: 600, marginTop: 7 }}>{d.clubName}</div>
         </div>
         <Card><div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label="Club Email" type="email" value={e} onChange={ev => setE(ev.target.value)} placeholder={`you@${CLUB_DOMAIN}`} />
@@ -1302,9 +1328,12 @@ function Branding({ d, up, user, say, ph, setPh }) {
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 14 }}>
         <Logo d={d} size={70} />
         <div style={{ flex: 1 }}><input type="file" accept="image/*" ref={fr} onChange={upload} style={{ display: "none" }} /><Btn t="Upload Logo" on={() => fr.current.click()} sm />
-          {d.logo?.startsWith?.("data:") && <div style={{ marginTop: 7 }}><button onClick={() => { up(x => ({ ...x, logo: "⚽" })); say("Logo reset"); }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>Remove logo</button></div>}</div></div>
+          {d.logo?.startsWith?.("data:") && <div style={{ marginTop: 7 }}><button onClick={() => { up(x => ({ ...x, logo: "mark" })); say("Logo reset"); }} style={{ background: "none", border: "none", color: "#dc2626", fontSize: 12, cursor: "pointer" }}>Remove logo</button></div>}</div></div>
       <label style={LB}>Or choose an icon</label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>{["⚽", "🦅", "🏥", "💊", "🩺", "🏉", "🏀", "⚕️"].map(x => <button key={x} onClick={() => { up(y => ({ ...y, logo: x })); say("Icon set"); }} style={{ width: 42, height: 42, fontSize: 21, borderRadius: 11, border: `2px solid ${d.logo === x ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === x ? "#eff6ff" : "#fff", cursor: "pointer" }}>{x}</button>)}</div></Card>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 7, alignItems: "center" }}>
+        <button onClick={() => { up(y => ({ ...y, logo: "mark" })); say("Default mark set"); }} title="Sports Stock mark"
+          style={{ width: 42, height: 42, borderRadius: 11, border: `2px solid ${d.logo === "mark" || d.logo === "⚽" ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === "mark" || d.logo === "⚽" ? "#eff6ff" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e3a8a" }}><Mark size={24} /></button>
+        {["🦅", "🏥", "💊", "🩺", "🏉", "🏀", "⚕️"].map(x => <button key={x} onClick={() => { up(y => ({ ...y, logo: x })); say("Icon set"); }} style={{ width: 42, height: 42, fontSize: 21, borderRadius: 11, border: `2px solid ${d.logo === x ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === x ? "#eff6ff" : "#fff", cursor: "pointer" }}>{x}</button>)}</div></Card>
     <Card s={{ marginBottom: 13 }}><H2 t="Club Name" /><div style={{ display: "flex", gap: 8 }}><input value={name} onChange={e => setName(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="Crystal Palace FC" /><Btn t="Save" on={() => { up(x => ({ ...x, clubName: name })); say("Club name updated"); }} sm /></div></Card>
     <Card><H2 t="Item Photos" /><p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 11px" }}>{photoCount} photo{photoCount !== 1 ? "s" : ""} stored on this device. Photos are the largest thing the app keeps — clear them if storage fills up. Item records are not affected.</p>
       <Btn t="Delete all item photos" on={() => { if (!photoCount) return say("No photos stored", "warn"); setPh({}); say("All item photos deleted"); }} bg="#fee2e2" fg="#991b1b" sm /></Card>
