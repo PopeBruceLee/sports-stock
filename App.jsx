@@ -865,7 +865,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
-  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const [scanRows, setScanRows] = useState([]); const scanRef = useRef();
+  const [scanBusy, setScanBusy] = useState(false); const [scanMsg, setScanMsg] = useState(""); const [scanRows, setScanRows] = useState([]);
   const [newCat, setNewCat] = useState(""); const [showNewCat, setShowNewCat] = useState(false);
   const [xf, setXf] = useState(null); const [xt, setXt] = useState(""); const [xc, setXc] = useState("");
 
@@ -917,31 +917,24 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const addPics = async files => {
     setPicBusy(true); const add = [];
     for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
-    setPics(p => [...p, ...add]); setPicBusy(false);
-  };
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
-
-  const addCat = () => {
-    const t = newCat.trim();
-    if (!t) return say("Enter a section name", "error");
-    if (cats.some(c => c.k.toLowerCase() === t.toLowerCase() || c.label.toLowerCase() === t.toLowerCase())) return say("That section already exists", "error");
-    const pal = CAT_PALETTE[cats.length % CAT_PALETTE.length];
-    up(x => ({ ...x, cats: [...catsOf(x), { k: t, label: t, col: pal.col, fg: pal.fg }] }));
-    setCat(t); setCatAuto(false); setNewCat(""); setShowNewCat(false); say(`"${t}" added`);
+    const all = [...pics, ...add];
+    setPics(all); setPicBusy(false);
+    if (add.length) readPics(all);
   };
 
-  const scanFill = async files => {
+  /* Reads the photos you've attached and fills any blank field. The same shots
+     stay on the item as audit evidence — nothing is taken twice. */
+  const readPics = async shots => {
+    if (!shots.length) return;
     setScanBusy(true); setScanMsg("");
-    const imgs = [];
-    for (const f of Array.from(files).slice(0, 4)) { try { imgs.push(await shrink(f)); } catch {} }
-    if (!imgs.length) { setScanBusy(false); return say("Could not open those photos", "error"); }
+    const imgs = shots.slice(-4).map(x => x.data.split(",")[1]);
     const known = prior.slice(0, 40).map(p => p.name).join("; ");
     const r = await askAI(
-      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
+      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
       `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
       imgs);
     setScanBusy(false);
-    if (!r) { setScanRows([]); setScanMsg(AI_ERR || "Could not read that — fill the fields in manually."); return say("Scan failed — see the note above", "error"); }
+    if (!r) { setScanRows([]); setScanMsg(AI_ERR || "Could not read those photos — fill the fields in manually."); return say("Couldn't read the photos", "error"); }
     setScanMsg("");
     const rd = v => (v == null ? "" : String(v).trim());
     const rows = [];
@@ -968,7 +961,18 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
 
     setScanRows(rows);
     const okN = rows.filter(x => x.ok).length;
-    say(okN === rows.length ? "All fields read" : `${okN} of ${rows.length} fields read`);
+    say(okN === rows.length ? "All fields read from the photo" : `${okN} of ${rows.length} fields read`);
+  };
+
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
+
+  const addCat = () => {
+    const t = newCat.trim();
+    if (!t) return say("Enter a section name", "error");
+    if (cats.some(c => c.k.toLowerCase() === t.toLowerCase() || c.label.toLowerCase() === t.toLowerCase())) return say("That section already exists", "error");
+    const pal = CAT_PALETTE[cats.length % CAT_PALETTE.length];
+    up(x => ({ ...x, cats: [...catsOf(x), { k: t, label: t, col: pal.col, fg: pal.fg }] }));
+    setCat(t); setCatAuto(false); setNewCat(""); setShowNewCat(false); say(`"${t}" added`);
   };
 
   const add = () => {
@@ -1013,11 +1017,11 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
           <option value="">Choose a team…</option>{TEAMS.map(t => <option key={t} value={t}>{t}</option>)}</select>
 </div>}
 
-      <div style={{ border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 12, padding: "13px 14px" }}>
-        <div style={{ fontSize: 16, fontWeight: 700, color: "#1e40af" }}>Scan to fill</div>
-        <input type="file" accept="image/*" capture="environment" multiple ref={scanRef} style={{ display: "none" }}
-          onChange={e => { if (e.target.files?.length) scanFill(e.target.files); e.target.value = ""; }} />
-        <Btn t={scanBusy ? "⏳ Reading…" : "📷 Scan product"} on={() => scanRef.current?.click()} dis={scanBusy} full />
+
+      <div><label style={LB}>Photos</label>
+        <PhotoBlock shots={pics} busy={picBusy || scanBusy} onAdd={addPics} onDel={id => { const left = pics.filter(s => s.id !== id); setPics(left); if (!left.length) { setScanRows([]); setScanMsg(""); } }} />
+        {scanBusy && <div style={{ fontSize: 13, color: "#1e40af", marginTop: 8, fontWeight: 600 }}>Reading the photo…</div>}
+        {pics.length > 0 && !scanBusy && <div style={{ marginTop: 8 }}><Btn t="Read photos again" on={() => readPics(pics)} bg="#f3f4f6" fg="#1e3a8a" sm /></div>}
         {scanMsg && <div style={{ marginTop: 10, background: "#fffbeb", border: "1px solid #fde047", borderRadius: 9, padding: "10px 12px", fontSize: 12.5, color: "#92400e", lineHeight: 1.5 }}>{scanMsg}</div>}
         {scanRows.length > 0 && (() => {
           const okN = scanRows.filter(x => x.ok).length; const allOk = okN === scanRows.length;
@@ -1038,7 +1042,6 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
           </div>);
         })()}
       </div>
-
       <div><label style={LB}>Item Name{scOK("name") && <Tick />}</label>
         <div style={{ display: "flex", gap: 7 }}>
           <input list="prioritems" value={name} onChange={e => onName(e.target.value)} onBlur={autoCat} style={{ ...IN, flex: 1 }} placeholder="e.g. Guedel airway, Whey protein, Tubigrip" />
@@ -1103,9 +1106,6 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
                   <button onClick={() => bumpLoc(l.id)} disabled={!canAdd} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: canAdd ? "#1e3a8a" : "#fff", color: canAdd ? "#fff" : T_FAINT, fontSize: 19, fontWeight: 700, cursor: canAdd ? "pointer" : "default", opacity: canAdd ? 1 : .4 }}>+</button>
                 </div></div>); })}</div></>}</div>
 
-      <div><label style={LB}>Photos</label>
-        <PhotoBlock shots={pics} busy={picBusy} onAdd={addPics} onDel={id => setPics(p => p.filter(s => s.id !== id))} />
-        {pics.length > 0 && <div style={{ fontSize: 12, color: "#16a34a", marginTop: 7, fontWeight: 600 }}>{pics.length} photo{pics.length !== 1 ? "s" : ""} attached</div>}</div>
 
       <Btn t="Save Item" on={add} full />
     </div></Card>}
