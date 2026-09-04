@@ -30,7 +30,6 @@ import { useState, useEffect, useRef } from "react";
 const CLUB_DOMAIN = "cpfc.co.uk";     // required email domain
 const AI_ENDPOINT = "/api/ai";        // set to "" to switch every AI feature off
 const STORE_KEY   = "sportsstock_v1";
-const PHOTO_KEY   = "sportsstock_v1_photos";
 
 /* Text colours — darkened for pitch-side readability */
 const T_MUTED = "#4b5563";   // secondary text (was #6b7280)
@@ -181,6 +180,25 @@ const toDataURL = f => new Promise((ok, no) => {
   r.onerror = no; r.readAsDataURL(f);
 });
 
+/* Loose text match — case, spacing and punctuation ignored, and one string
+   containing the other counts (packs abbreviate). */
+const norm = v => String(v || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const textMatch = (a, b) => { const x = norm(a), y = norm(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
+const dateMatch = (a, b) => {
+  const p = parseExp(a), q = parseExp(b);
+  if (!p || !q || isNaN(p.d) || isNaN(q.d)) return false;
+  if (p.monthOnly || q.monthOnly) return p.d.getFullYear() === q.d.getFullYear() && p.d.getMonth() === q.d.getMonth();
+  return p.d.toDateString() === q.d.toDateString();
+};
+
+/* Medication counts are per tablet/capsule, not per box. A pack's total, what's
+   been used out of it, and what's left. */
+const medLine = i => {
+  if (!i.unit || !i.qty) return "";
+  const total = +i.qty, rem = i.remaining == null ? total : +i.remaining;
+  return `${total} ${i.unit} in box · ${Math.max(0, total - rem)} ${i.unit} dispensed · ${rem} ${i.unit} remaining`;
+};
+
 /* ── STYLE PRIMITIVES ─────────────────────────────────────── */
 const IN = { width: "100%", padding: "13px 14px", border: "1.5px solid #94a3b8", borderRadius: 11, fontSize: 17, fontWeight: 500, boxSizing: "border-box", background: "#fff", fontFamily: "inherit", outline: "none", color: "#000", WebkitTextFillColor: "#000", opacity: 1 };
 const LB = { display: "block", fontSize: 15, fontWeight: 700, color: "#1f2937", marginBottom: 7 };
@@ -240,7 +258,7 @@ const migrate = x => {
   };
 };
 
-const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
+const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, auto: true, lastAt: null, lastCount: 0, lastError: "" } };
 
 /* ── PHOTO BLOCK ──────────────────────────────────────────── */
 /* Used when adding an item and again during audit. One or more photos per
@@ -270,16 +288,29 @@ function PhotoBlock({ shots, onAdd, onDel, busy }) {
   );
 }
 
+/* ── SHAREPOINT SYNC ──────────────────────────────────────── */
+const ledgerRows = d => d.ledger.map(l => ({ ts: l.ts, user: l.user, role: l.role, team: l.team, action: l.action, detail: l.detail }));
+const snapshotRows = d => {
+  const cats = catsOf(d);
+  return [
+    ...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, unit: "", remaining: "", expiry: m.expiry, batch: "", team: m.team || "" })),
+    ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: (i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join("; ") || "UNASSIGNED", qty: i.qty, unit: i.unit || "", remaining: i.remaining == null ? "" : i.remaining, expiry: i.expiry, batch: i.batch || "", team: i.team || "" })),
+  ];
+};
+const postSync = async (url, body) => {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return true;
+};
+/* Cheap change-detector so auto-sync only fires when the stock actually moved */
+const sigOf = d => { const t = JSON.stringify({ i: d.items, m: d.meds, l: d.invLocs, c: d.checks, o: d.orders, g: d.ledger.length }); let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return String(h); };
+
 /* ── ROOT ─────────────────────────────────────────────────── */
 export default function App() {
   const [storeErr, setStoreErr] = useState("");
   const [d, setD] = useState(() => {
     try { const s = localStorage.getItem(STORE_KEY); return s ? migrate({ ...BLANK, ...JSON.parse(s) }) : BLANK; }
     catch { return BLANK; }
-  });
-  /* Photos live in their own key so a full photo store never risks stock data */
-  const [ph, setPh] = useState(() => {
-    try { const s = localStorage.getItem(PHOTO_KEY); return s ? JSON.parse(s) : {}; } catch { return {}; }
   });
   // Restore the signed-in session so a refresh doesn't log you out
   const [user, setUser] = useState(() => {
@@ -300,22 +331,44 @@ export default function App() {
     }
   }, [d]);
 
-  // Persist photos separately
-  useEffect(() => {
-    try { localStorage.setItem(PHOTO_KEY, JSON.stringify(ph)); }
-    catch { setStoreErr("Photo storage is full — delete some item photos, or export and clear old records."); }
-  }, [ph]);
-
   // Persist session
   useEffect(() => {
     try { user ? localStorage.setItem(STORE_KEY + "_session", JSON.stringify(user)) : localStorage.removeItem(STORE_KEY + "_session"); } catch {}
   }, [user]);
 
+  /* Automatic SharePoint sync. Waits for changes to settle, then sends the
+     ledger and a fresh snapshot. Never fires on first load, and the sync's own
+     bookkeeping is excluded from the signature so it can't loop. */
+  const syncRef = useRef({ sig: null, timer: null, busy: false });
+  useEffect(() => {
+    const cfg = d.sync || {};
+    const sig = sigOf(d);
+    if (syncRef.current.sig === null) { syncRef.current.sig = sig; return; }
+    if (sig === syncRef.current.sig) return;
+    syncRef.current.sig = sig;
+    if (!cfg.enabled || !cfg.auto || !cfg.url) return;
+    clearTimeout(syncRef.current.timer);
+    syncRef.current.timer = setTimeout(async () => {
+      if (syncRef.current.busy) return;
+      syncRef.current.busy = true;
+      try {
+        const base = { source: "SportsStockApp", club: d.clubName, sentAt: nowISO(), sentBy: user?.name || "auto" };
+        const lr = ledgerRows(d);
+        if (lr.length) await postSync(cfg.url, { ...base, type: "ledger", rowCount: lr.length, rows: lr });
+        const sr = snapshotRows(d);
+        await postSync(cfg.url, { ...base, type: "snapshot", rowCount: sr.length, rows: sr });
+        setD(x => ({ ...x, sync: { ...(x.sync || {}), lastAt: nowISO(), lastCount: x.ledger.length, lastError: "" } }));
+      } catch (e) {
+        setD(x => ({ ...x, sync: { ...(x.sync || {}), lastError: String(e.message || e) } }));
+      } finally { syncRef.current.busy = false; }
+    }, 20000);
+  }, [d, user]);
+
   const say = (m, t = "ok") => { setMsg({ m, t }); setTimeout(() => setMsg(null), 4000); };
   const up = fn => setD(p => fn(p));
   const rec = (x, action, detail, team) => ({ ...x, ledger: [...x.ledger, { id: uid(), ts: nowISO(), user: user?.name || "system", role: user ? ROLES[user.role] : "-", team: team || "-", action, detail }] });
   const logIt = (act, det, tm) => up(x => rec({ ...x, audit: [...x.audit, { id: uid(), act, det, by: user?.name || "-", tm, ts: nowISO() }] }, act, det, tm));
-  const P = { d, up, user, say, logIt, rec, ph, setPh };
+  const P = { d, up, user, say, logIt, rec };
 
   return (
     <div style={{ fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif", background: "#f9fafb", minHeight: "100vh", color: "#111" }}>
@@ -438,7 +491,7 @@ function Register({ d, up, setPage, say, rec }) {
 const Wrap = ({ children }) => <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}><div style={{ width: "100%", maxWidth: 430 }}>{children}</div></div>;
 
 /* ── SHELL ────────────────────────────────────────────────── */
-function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
+function Shell({ d, up, user, say, logIt, rec, setUser, setPage }) {
   const medOn = !!d.modules?.med;
   const [mod, setMod] = useState(medOn ? "med" : "inv");
   const [tab, setTab] = useState(medOn ? "dash" : "idash");
@@ -455,9 +508,9 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
   // If the medication module is switched off while you're inside it, bounce out
   useEffect(() => { if ((!medOn || master) && mod === "med") { setMod("inv"); setTab("idash"); } }, [medOn, master, mod]);
 
-  const P = { d, up, user, team, master, say, logIt, rec, ph, setPh };
+  const P = { d, up, user, team, master, say, logIt, rec };
   const medT = [["dash", "Dashboard"], ["inv", "Inventory"], ["pills", "Pill Count"], ["disp", "Dispense"], ["trend", "Trends"], ...(isDoc ? [["req", "Requests", pend], ["aud", "Audit"], ["cfg", "Settings"]] : [])];
-  const invT = [["idash", "Dashboard"], ["chk", "Stock Audit"], ["add", "Add"], ["loc", "Setup"], ["exp", "Alerts", d.items.filter(i => alertOf(i.expiry)).length], ["ord", "Orders", ordN], ["hist", "History"]];
+  const invT = [["idash", "Dashboard"], ["chk", "Stock Audit"], ["add", "Add"], ["loc", "Overview"], ["exp", "Alerts", d.items.filter(i => alertOf(i.expiry)).length], ["ord", "Orders", ordN], ["hist", "History"]];
   const admT = [["users", "Approvals", pendUsers], ["team", "Team"], ["brand", "Branding"], ["backup", "Backup"]];
   const tabs = mod === "med" ? medT : mod === "inv" ? invT : admT;
   const sw = m => { setMod(m); setTab(m === "med" ? "dash" : m === "inv" ? "idash" : "users"); };
@@ -500,7 +553,7 @@ function Shell({ d, up, user, say, logIt, rec, ph, setPh, setUser, setPage }) {
         {mod === "inv" && tab === "idash" && <InvDash {...P} />}
         {mod === "inv" && tab === "chk" && <StockAudit {...P} />}
         {mod === "inv" && tab === "add" && <AddItems {...P} />}
-        {mod === "inv" && tab === "loc" && <><Locs {...P} /><div style={{ marginTop: 26 }}><Sections {...P} /></div></>}
+        {mod === "inv" && tab === "loc" && <Overview {...P} />}
         {mod === "inv" && tab === "exp" && <Expiry {...P} />}
         {mod === "inv" && tab === "ord" && <Orders {...P} />}
         {mod === "inv" && tab === "hist" && <Hist {...P} />}
@@ -724,11 +777,11 @@ function InvDash({ d, team, master }) {
 }
 
 /* Stock Audit — every recorded element is verified individually */
-function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
+function StockAudit({ d, up, user, team, master, say, logIt }) {
   const cats = catsOf(d);
   const [loc, setLoc] = useState(""); const [on, setOn] = useState(false); const [c, setC] = useState({});
   const [warn, setWarn] = useState(false); const [busy, setBusy] = useState(false); const [sm, setSm] = useState("");
-  const [open, setOpen] = useState(null); const fr = useRef();
+  const [open, setOpen] = useState(null); const [verBusy, setVerBusy] = useState(""); const fr = useRef();
   const myLocs = (d.invLocs || []).filter(l => master || l.team === team);
   const here = locById(d, loc);
   const items = d.items.filter(i => (i.locs || []).some(x => x.id === loc));
@@ -739,25 +792,35 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
   const els = i => KINDS.filter(k => k.k === "name" || k.k === "qty" || (k.k === "expiry" && i.expiry) || (k.k === "batch" && i.batch));
   const elOK = (i, k) => !!c[i.id]?.el?.[k];
   const full = i => els(i).every(k => elOK(i, k.k));
-  const shotsOf = i => (ph[i.pg] || []);
-  const started = items.filter(i => c[i.id]?.on);
-  const verified = started.filter(full);
+  const [ver, setVer] = useState({});   // per item: what the photo said vs what's recorded
 
-  const tog = id => setC(p => ({ ...p, [id]: { ...p[id], on: !p[id]?.on, qty: p[id]?.qty ?? "", note: p[id]?.note || "", el: p[id]?.el || {} } }));
-  const togEl = (i, k) => setC(p => ({ ...p, [i.id]: { ...p[i.id], on: true, qty: p[i.id]?.qty ?? "", el: { ...(p[i.id]?.el || {}), [k]: !p[i.id]?.el?.[k] } } }));
-  const allEl = i => setC(p => ({ ...p, [i.id]: { ...p[i.id], on: true, qty: p[i.id]?.qty ?? "", el: Object.fromEntries(els(i).map(k => [k.k, true])) } }));
-  const setQ = (id, v) => setC(p => ({ ...p, [id]: { ...p[id], on: true, qty: v, el: p[id]?.el || {} } }));
-  const setNo = (id, v) => setC(p => ({ ...p, [id]: { ...p[id], note: v } }));
+  /* Photograph the item; whatever is legible is compared against the record.
+     Exact matches tick themselves, anything else is flagged for you to judge. */
+  const verify = async (item, files) => {
+    setVerBusy(item.id);
+    const imgs = [];
+    for (const f of Array.from(files).slice(0, 3)) { try { imgs.push(await shrink(f)); } catch {} }
+    const r = await askAI(
+      'Read this stock item from the photo(s) — packaging, label or blister strips. Extract ONLY what is clearly legible, never guess. Expiry exactly as printed (DD/MM/YYYY, or MM/YYYY if no day). If blister strips are visible, count units still in the blisters. Use null for anything illegible. Respond ONLY with JSON, no markdown: {"name":"","expiry":"","batch":"","remaining":null}',
+      `Expected: ${item.name}${item.dose ? " " + item.dose : ""}`, imgs);
+    setVerBusy("");
+    if (!r) return say(AI_ERR || "Could not read the photo", "error");
 
-  const attach = async (item, files) => {
-    let pg = item.pg;
-    if (!pg) { pg = uid(); up(x => ({ ...x, items: x.items.map(y => y.id === item.id ? { ...y, pg } : y) })); }
-    const add = [];
-    for (const f of Array.from(files)) { try { add.push({ id: uid(), data: await shrinkPhoto(f), at: nowISO(), by: user.name }); } catch {} }
-    setPh(p => ({ ...p, [pg]: [...(p[pg] || []), ...add] }));
-    say(`${add.length} photo${add.length !== 1 ? "s" : ""} added`);
+    const res = {};
+    const put = (k, read, ok) => { res[k] = { read, status: (read === "" || read == null) ? "unread" : ok ? "match" : "differ" }; };
+    put("name", r.name ?? "", textMatch(r.name, `${item.name} ${item.dose || ""}`));
+    if (item.expiry) put("expiry", r.expiry ?? "", dateMatch(r.expiry, item.expiry));
+    if (item.batch) put("batch", r.batch ?? "", textMatch(r.batch, item.batch));
+    const reg = item.unit ? (item.remaining ?? item.qty) : qtyAt(item);
+    if (r.remaining != null && !isNaN(+r.remaining)) { put("qty", String(+r.remaining), +r.remaining === +reg); setQ(item.id, String(+r.remaining)); }
+    else put("qty", "", false);
+
+    setVer(p => ({ ...p, [item.id]: res }));
+    const auto = Object.entries(res).filter(([, v]) => v.status === "match").map(([k]) => k);
+    setC(p => ({ ...p, [item.id]: { ...p[item.id], on: true, qty: p[item.id]?.qty ?? "", el: { ...(p[item.id]?.el || {}), ...Object.fromEntries(auto.map(k => [k, true])) } } }));
+    const bad = Object.values(res).filter(v => v.status !== "match").length;
+    say(bad ? `${auto.length} confirmed, ${bad} to check` : "All elements confirmed from the photo");
   };
-  const detach = (item, id) => setPh(p => ({ ...p, [item.pg]: (p[item.pg] || []).filter(s => s.id !== id) }));
 
   const scan = async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -780,13 +843,13 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
     go(verified);
   };
   const go = done => {
-    const rows = done.map(i => { const en = c[i.id]?.qty === "" ? qtyAt(i) : +c[i.id].qty; const pv = last?.items.find(x => x.id === i.id); return { id: i.id, name: i.name, dose: i.dose, expiry: i.expiry, batch: i.batch || "", qty: qtyAt(i), entered: en, note: c[i.id]?.note || "", el: c[i.id]?.el || {}, used: pv ? (pv.entered ?? pv.qty) - en : null }; });
+    const rows = done.map(i => { const en = c[i.id]?.qty === "" ? qtyAt(i) : +c[i.id].qty; const pv = last?.items.find(x => x.id === i.id); return { id: i.id, name: i.name, dose: i.dose, expiry: i.expiry, batch: i.batch || "", qty: qtyAt(i), entered: en, note: c[i.id]?.note || "", el: c[i.id]?.el || {}, ver: ver[i.id] || null, used: pv ? (pv.entered ?? pv.qty) - en : null }; });
     up(x => ({ ...x, checks: [...x.checks, { id: uid(), locId: loc, loc: here?.name || "", team: here?.team || "", at: nowISO(), by: user.name, n: done.length, items: rows, mm: mm.map(m => ({ name: m.name, exp: qtyAt(m), act: +c[m.id].qty })) }], items: x.items.map(i => { const r = rows.find(y => y.id === i.id); return r ? { ...i, locs: i.locs.map(l => l.id === loc ? { ...l, qty: r.entered } : l), checked: nowISO() } : i; }) }));
     logIt("AUDIT", `Stock audit at ${here?.name} — ${done.length} items fully verified${mm.length ? `, ${mm.length} mismatches` : ""}`, here?.team || team);
-    say(`Audit saved — ${done.length} items`); setOn(false); setC({}); setLoc(""); setWarn(false); setSm(""); setOpen(null);
+    say(`Audit saved — ${done.length} items`); setOn(false); setC({}); setVer({}); setLoc(""); setWarn(false); setSm(""); setOpen(null);
   };
 
-  const valueOf = (i, k) => k === "name" ? `${i.name}${i.dose ? " " + i.dose : ""}` : k === "expiry" ? fmtD(i.expiry) : k === "batch" ? (i.batch || "—") : `Registered ${qtyAt(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty}` : ""}`;
+  const valueOf = (i, k) => k === "name" ? `${i.name}${i.dose ? " " + i.dose : ""}` : k === "expiry" ? fmtD(i.expiry) : k === "batch" ? (i.batch || "—") : (i.unit ? `${medLine(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty} ${i.unit}` : ""}` : `Registered ${qtyAt(i)}${c[i.id]?.qty !== "" && c[i.id]?.qty != null ? ` · counted ${c[i.id].qty}` : ""}`);
 
   return (<div><H1 t="Stock Audit" />
     {!on ? <Card><H2 t="Start New Audit" /><label style={LB}>Location</label>
@@ -816,23 +879,22 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 11, marginBottom: 6 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: done ? "#166534" : "#92400e" }}>{done ? "✓ All elements confirmed" : `${els(i).filter(k => elOK(i, k.k)).length}/${els(i).length} elements confirmed`}</div>
                     <button onClick={() => allEl(i)} style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 8, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, color: "#1e3a8a", cursor: "pointer" }}>Confirm all</button></div>
-                  <div style={{ border: "1px solid #e2e8f0", borderRadius: 9, padding: "9px 11px", marginBottom: 7, background: "#fff" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 9 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600 }}>{shotsOf(i).length ? `${shotsOf(i).length} photo${shotsOf(i).length !== 1 ? "s" : ""} on file` : "No photos on file"}</div>
-                      <AuditShot onPick={files => attach(i, files)} />
-                    </div>
-                    {shotsOf(i).length > 0
-                      ? <div style={{ display: "flex", gap: 6, marginTop: 8, overflowX: "auto" }}>{shotsOf(i).map(s => <div key={s.id} style={{ position: "relative", flexShrink: 0 }}>
-                          <img src={s.data} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 8, border: "1px solid #e2e8f0" }} />
-                          <button onClick={() => detach(i, s.id)} style={{ position: "absolute", top: -5, right: -5, width: 19, height: 19, borderRadius: 99, background: "#dc2626", color: "#fff", border: "2px solid #fff", fontSize: 11, lineHeight: 1, cursor: "pointer", fontWeight: 700 }}>×</button></div>)}</div>
-                      : <div style={{ fontSize: 11, color: "#d97706", marginTop: 6 }}>Tap 📷 to capture the item — one shot showing name, expiry, amount and batch is enough</div>}
-                  </div>
+                  <div style={{ marginBottom: 7 }}><AuditShot label={verBusy === i.id ? "Reading…" : "📷 Verify with photo"} wide onPick={files => verify(i, files)} /></div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{els(i).map(k => {
-                    const okd = elOK(i, k.k);
-                    return (<div key={k.k} style={{ border: `1px solid ${okd ? "#bbf7d0" : "#e2e8f0"}`, background: okd ? "#f0fdf4" : "#fff", borderRadius: 9, padding: "8px 10px" }}>
+                    const okd = elOK(i, k.k); const v = ver[i.id]?.[k.k];
+                    const tone = v?.status === "differ" ? { br: "#f87171", bg: "#fef2f2" } : v?.status === "unread" ? { br: "#fcd34d", bg: "#fffbeb" } : okd ? { br: "#bbf7d0", bg: "#f0fdf4" } : { br: "#e2e8f0", bg: "#fff" };
+                    return (<div key={k.k} style={{ border: `1.5px solid ${tone.br}`, background: tone.bg, borderRadius: 9, padding: "8px 10px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
                         <input type="checkbox" checked={okd} onChange={() => togEl(i, k.k)} style={{ width: 18, height: 18, accentColor: "#16a34a", flexShrink: 0 }} />
-                        <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 12, fontWeight: 600 }}>{k.label}</div><div style={{ fontSize: 12, color: T_MUTED, overflow: "hidden", textOverflow: "ellipsis" }}>{valueOf(i, k.k)}</div></div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>{k.label}
+                            {v?.status === "match" && <span style={{ color: "#166534", fontWeight: 800 }}>✓ photo matches</span>}
+                            {v?.status === "differ" && <span style={{ color: "#b91c1c", fontWeight: 800 }}>✕ doesn't match</span>}
+                            {v?.status === "unread" && <span style={{ color: "#b45309", fontWeight: 800 }}>illegible</span>}</div>
+                          <div style={{ fontSize: 12, color: T_MUTED, overflow: "hidden", textOverflow: "ellipsis" }}>{valueOf(i, k.k)}</div>
+                          {v?.status === "differ" && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3, fontWeight: 600 }}>Photo reads: {v.read}</div>}
+                          {v?.status === "unread" && <div style={{ fontSize: 11.5, color: "#b45309", marginTop: 3 }}>Couldn't be read — check it by hand</div>}
+                        </div>
                       </div>
                     </div>);
                   })}</div>
@@ -847,21 +909,22 @@ function StockAudit({ d, up, user, team, master, say, logIt, ph, setPh }) {
       </div>}
   </div>);
 }
-function AuditShot({ onPick }) {
+function AuditShot({ onPick, label, wide }) {
   const r = useRef();
   return (<>
     <input type="file" accept="image/*" capture="environment" multiple ref={r} style={{ display: "none" }} onChange={e => { if (e.target.files?.length) onPick(e.target.files); e.target.value = ""; }} />
-    <button onClick={() => r.current?.click()} style={{ background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: 8, padding: "6px 9px", fontSize: 13, cursor: "pointer", flexShrink: 0 }}>📷</button>
+    <button onClick={() => r.current?.click()} style={{ background: "#1e3a8a", color: "#fff", border: "none", borderRadius: 9, padding: wide ? "10px 14px" : "6px 9px", fontSize: 13.5, fontWeight: 700, cursor: "pointer", flexShrink: 0, width: wide ? "100%" : undefined }}>{label || "📷"}</button>
   </>);
 }
 
-function AddItems({ d, up, user, team, master, say, ph, setPh }) {
+function AddItems({ d, up, user, team, master, say, logIt }) {
   const cats = catsOf(d);
   const [sel, setSel] = useState([]); const [filt, setFilt] = useState("All"); const [show, setShow] = useState(false);
   const [tgt, setTgt] = useState(master ? "" : team);   // Master must choose; otherwise the team you're viewing
   const [name, setName] = useState(""); const [dose, setDose] = useState(""); const [cat, setCat] = useState("");
   const [catBusy, setCatBusy] = useState(false); const [catAuto, setCatAuto] = useState(false); const [filled, setFilled] = useState("");
   const [qty, setQty] = useState(""); const [sameAll, setSameAll] = useState(null);
+  const [unit, setUnit] = useState(""); const [remain, setRemain] = useState("");
   const [expiry, setExpiry] = useState(""); const [batch, setBatch] = useState("");
   const [variants, setVariants] = useState([]); const [locQty, setLocQty] = useState({});
   const [pics, setPics] = useState([]); const [picBusy, setPicBusy] = useState(false);
@@ -873,7 +936,9 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
 
   const scOK = k => scanRows.find(x => x.k === k)?.ok;
   const Tick = () => <span style={{ color: "#16a34a", fontWeight: 800, marginLeft: 5 }}>✓</span>;
-  const isMed = cat === "Medications"; const totalQty = +qty || 0;
+  const isMed = cat === "Medications" || !!unit; const totalQty = +qty || 0;
+  const remQty = remain === "" ? totalQty : Math.min(+remain || 0, totalQty);
+  const dispQty = Math.max(0, totalQty - remQty);
   const allocated = Object.values(locQty).reduce((s, n) => s + n, 0);
   const remaining = Math.max(0, totalQty - allocated);
   const variantTotal = variants.reduce((s, v) => s + (+v.qty || 0), 0);
@@ -930,7 +995,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     const imgs = shots.slice(-4).map(x => x.data.split(",")[1]);
     const known = prior.slice(0, 40).map(p => p.name).join("; ");
     const r = await askAI(
-      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. If blister strips are visible, count the units remaining. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","total":null,"remaining":null}',
+      'You are reading photos of a medical or sports-medicine stock item — packaging, a printed label, or blister strips. One photo may show several details at once. Extract ONLY what is clearly legible and never guess. Dates: copy exactly as printed, as DD/MM/YYYY when a day is shown, otherwise MM/YYYY. For a medicine, "unit" is what the pack is counted in — tablets, capsules, sachets or ml — and "total" is how many the FULL pack holds (read it off the carton, e.g. "16 tablets"). If blister strips are visible, count the units still in the blisters and put that in "remaining"; count empty popped bubbles as used. If no strips are visible, leave remaining null. For non-medicines, leave unit null and put the number of units in total. Use null or "" for anything you cannot read confidently. Respond ONLY with JSON, no markdown: {"name":"","dose":"","expiry":"","batch":"","unit":null,"total":null,"remaining":null}',
       `Read this item.${known ? ` If the product matches one of these already in the register, use that exact spelling: ${known}` : ""}`,
       imgs);
     setScanBusy(false);
@@ -950,10 +1015,18 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       else { if (!expiry) setExpiry(rd(r.expiry)); push("expiry", "Expiry date", fmtD(rd(r.expiry)), true, expiry ? "kept what you typed" : ""); }
     } else push("expiry", "Expiry date", "", false);
 
-    const count = r.remaining ?? r.total;
-    if (count != null && !isNaN(+count)) {
-      if (!qty) { setQty(String(+count)); setSameAll(null); setVariants([]); setLocQty({}); }
-      push("qty", "Amount / strip count", `${+count}${r.remaining != null && r.total != null && r.total !== r.remaining ? ` remaining of ${r.total}` : ""}`, true, qty ? "kept what you typed" : "");
+    const u = ["tablets", "capsules", "sachets", "ml"].includes(rd(r.unit)) ? rd(r.unit) : "";
+    if (u && !unit) setUnit(u);
+    const tot = r.total != null && !isNaN(+r.total) ? +r.total : null;
+    const rem = r.remaining != null && !isNaN(+r.remaining) ? +r.remaining : null;
+    if (tot != null || rem != null) {
+      const t = tot ?? rem, x = u || unit;
+      if (!qty) { setQty(String(t)); setSameAll(null); setVariants([]); setLocQty({}); }
+      if (x && rem != null && !remain) setRemain(String(rem));
+      push("qty", x ? "Count" : "Amount",
+        x && rem != null && tot != null ? `${tot} ${x} in box · ${Math.max(0, tot - rem)} ${x} dispensed · ${rem} ${x} remaining`
+          : x ? `${t} ${x}${rem != null ? ` remaining` : " in box"}` : `${t}`,
+        true, qty ? "kept what you typed" : (x && rem == null ? "strips not visible — remaining assumed full" : ""));
     } else push("qty", "Amount / strip count", "", false);
 
     if (rd(r.batch)) { if (!batch) setBatch(rd(r.batch)); push("batch", "Batch / lot number", rd(r.batch), true, batch ? "kept what you typed" : ""); }
@@ -964,7 +1037,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     say(okN === rows.length ? "All fields read from the photo" : `${okN} of ${rows.length} fields read`);
   };
 
-  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
+  const reset = () => { setName(""); setDose(""); setCat(""); setCatAuto(false); setFilled(""); setQty(""); setSameAll(null); setUnit(""); setRemain(""); setExpiry(""); setBatch(""); setVariants([]); setLocQty({}); setPics([]); setDoses([]); setScanMsg(""); setScanRows([]); setBnf(null); setNewCat(""); setShowNewCat(false); setTgt(master ? "" : team); setShow(false); };
 
   const addCat = () => {
     const t = newCat.trim();
@@ -978,27 +1051,28 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
   const add = () => {
     if (!tgt) return say("Choose which team this belongs to", "error");
     if (!name.trim()) return say("Item name required", "error");
-    if (!totalQty) return say("Enter the quantity being added", "error");
-    const locs = Object.entries(locQty).filter(([, n]) => n > 0).map(([id, n]) => ({ id, qty: n }));
-    if (!locs.length) return say("Assign the item to at least one location", "error");
-    if (allocated !== totalQty) return say(`${remaining} of ${totalQty} still to allocate`, "error");
-    const pg = pics.length ? uid() : null;
-    if (pg) setPh(p => ({ ...p, [pg]: pics }));
+    if (!totalQty) return say(isMed ? "Enter how many are in a full box" : "Enter the quantity being added", "error");
+    if (isMed && !unit) return say("Say whether these are tablets, capsules, sachets or ml", "error");
+    const picked = Object.entries(locQty).filter(([, n]) => n > 0);
+    if (!picked.length) return say(isMed ? "Choose where this is kept" : "Assign the item to at least one location", "error");
+    const locs = isMed ? [{ id: picked[0][0], qty: remQty }] : picked.map(([id, n]) => ({ id, qty: n }));
+    if (!isMed && allocated !== totalQty) return say(`${remaining} of ${totalQty} still to allocate`, "error");
     const locTxt = locs.map(l => locNm(d, l.id)).join(", ");
     if (sameAll === false && variants.length) {
       if (variants.find(v => !expValid(v.expiry))) return say("Each batch needs a valid expiry", "error");
       variants.forEach((v, idx) => {
-        up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry: v.expiry, batch: v.batch, qty: +v.qty || 1, locs: idx === 0 ? locs : [locs[0]], pg, added: nowISO(), checked: nowISO() }] }));
+        up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry: v.expiry, batch: v.batch, qty: +v.qty || 1, locs: idx === 0 ? locs : [locs[0]], added: nowISO(), checked: nowISO() }] }));
         const a = alertOf(v.expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry: v.expiry, lvl: a.label, done: false }] }));
       });
       say(`${variants.length} batches added to ${teamShort(tgt)}`); reset(); return;
     }
     if (!expValid(expiry)) return say("Enter expiry as MM/YYYY or DD/MM/YYYY", "error");
-    up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, locs, pg, added: nowISO(), checked: nowISO() }] }));
+    up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, unit: isMed ? unit : "", remaining: isMed ? remQty : null, locs, added: nowISO(), checked: nowISO() }] }));
     const a = alertOf(expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry, lvl: a.label, done: false }] }));
-    say(`Added to ${locs.length} location${locs.length !== 1 ? "s" : ""}${pics.length ? ` with ${pics.length} photo${pics.length !== 1 ? "s" : ""}` : ""}`); reset();
+    logIt("ADD_ITEM", `${name.trim()}${dose ? " " + dose : ""} × ${totalQty}${unit ? " " + unit : ""} → ${locTxt}`, tgt);
+    say(`Added to ${locs.length} location${locs.length !== 1 ? "s" : ""}`); reset();
   };
-  const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); say("Removed"); };
+  const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); logIt("DEL_ITEM", `${i.name} removed`, i.team || team); say("Removed"); };
   const move = () => {
     if (!xt && !xc) return say("Choose a location or a section to move to", "error");
     const nextCat = xc === "_none" ? "" : xc;
@@ -1018,7 +1092,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
 </div>}
 
 
-      <div><label style={LB}>Photos</label>
+      <div><label style={LB}>Read from photo</label>
         <PhotoBlock shots={pics} busy={picBusy || scanBusy} onAdd={addPics} onDel={id => { const left = pics.filter(s => s.id !== id); setPics(left); if (!left.length) { setScanRows([]); setScanMsg(""); } }} />
         {scanBusy && <div style={{ fontSize: 13, color: "#1e40af", marginTop: 8, fontWeight: 600 }}>Reading the photo…</div>}
         {pics.length > 0 && !scanBusy && <div style={{ marginTop: 8 }}><Btn t="Read photos again" on={() => readPics(pics)} bg="#f3f4f6" fg="#1e3a8a" sm /></div>}
@@ -1070,7 +1144,20 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       {(isMed || dose || doses.length > 0) && <div><label style={LB}>Dose / Strength{scOK("dose") && <Tick />}</label>
         <input value={dose} onChange={e => setDose(e.target.value)} style={IN} placeholder="e.g. 400mg" /></div>}
 
-      <Field label={<>Quantity *{scOK("qty") && <Tick />}</>} type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} placeholder="How many units are you adding?" />
+      <div><label style={LB}>{isMed ? "Tablets / capsules in a full box" : "Quantity"} <span style={{ color: "#ef4444" }}>*</span>{scOK("qty") && <Tick />}</label>
+        <input type="number" value={qty} onChange={e => { setQty(e.target.value); setSameAll(null); setVariants([]); setLocQty({}); }} style={IN} placeholder={isMed ? "e.g. 16" : "How many units are you adding?"} /></div>
+      {isMed && <>
+        <div><label style={LB}>Counted as</label>
+          <div style={{ display: "flex", gap: 8 }}>{["tablets", "capsules", "sachets", "ml"].map(u => (
+            <button key={u} onClick={() => setUnit(u)} style={{ flex: 1, padding: "10px 6px", borderRadius: 10, border: `2px solid ${unit === u ? "#1e3a8a" : "#e2e8f0"}`, background: unit === u ? "#eff6ff" : "#fff", color: unit === u ? "#1e3a8a" : "#374151", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>{u}</button>))}</div></div>
+        <div><label style={LB}>Remaining now{scOK("qty") && <Tick />}</label>
+          <input type="number" value={remain} onChange={e => setRemain(e.target.value)} style={IN} placeholder={`Leave blank if the box is full (${totalQty || "—"})`} /></div>
+        {totalQty > 0 && unit && <div style={{ display: "flex", border: "1px solid #e2e8f0", borderRadius: 11, overflow: "hidden" }}>
+          {[[totalQty, `${unit} in box`, "#0f172a"], [dispQty, `${unit} dispensed`, "#b45309"], [remQty, `${unit} remaining`, "#166534"]].map(([v, l, c], k) => (
+            <div key={l} style={{ flex: 1, padding: "11px 8px", textAlign: "center", borderLeft: k ? "1px solid #e2e8f0" : "none", background: k === 2 ? "#f0fdf4" : "#fff" }}>
+              <div style={{ fontSize: 21, fontWeight: 800, color: c }}>{v}</div>
+              <div style={{ fontSize: 11.5, color: T_MUTED, fontWeight: 600 }}>{l}</div></div>))}</div>}
+      </>}
       {totalQty > 1 && <div style={{ background: "#f8fafc", borderRadius: 11, padding: "12px 14px", border: "1px solid #e5e7eb" }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 9 }}>You've entered {totalQty} units. Do they all share the same expiry and batch/lot number?</div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1094,7 +1181,11 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
       <div><label style={LB}>Locations <span style={{ color: "#ef4444" }}>*</span></label>
         {!tgt ? <div style={{ background: "#f8fafc", border: "1px dashed #cbd5e1", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: T_MUTED }}>Choose a team above first.</div>
           : !formLocs.length ? <div style={{ background: "#fffbeb", border: "1px solid #fde047", borderRadius: 10, padding: "11px 13px", fontSize: 13, color: "#92400e" }}>{teamShort(tgt)} has no locations yet — add them in the <b>Setup</b> tab, then come back.</div> : <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
+            {isMed ? <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{formLocs.map(l => { const on = locQty[l.id] > 0; return (
+              <button key={l.id} onClick={() => setLocQty({ [l.id]: totalQty || 1 })} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, border: `1.5px solid ${on ? teamCol(l.team).dot : "#e2e8f0"}`, background: on ? teamCol(l.team).bg : "#fff", borderRadius: 11, padding: "12px 13px", cursor: "pointer", textAlign: "left" }}>
+                <span style={{ fontSize: 15, fontWeight: on ? 700 : 500, color: on ? teamCol(l.team).fg : "#1f2937" }}>📍 {l.name}</span>
+                {on && <span style={{ fontSize: 14, fontWeight: 800, color: teamCol(l.team).fg }}>✓</span>}</button>); })}</div>
+            : <><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: remaining === 0 && totalQty > 0 ? "#f0fdf4" : "#f8fafc", border: `1px solid ${remaining === 0 && totalQty > 0 ? "#bbf7d0" : "#e2e8f0"}`, borderRadius: 10, padding: "10px 13px", marginBottom: 9 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: "#1f2937" }}>{allocated} of {totalQty || 0} allocated</div>
               <div style={{ fontSize: 13, fontWeight: 700, color: totalQty === 0 ? T_MUTED : remaining === 0 ? "#166534" : "#d97706" }}>{totalQty === 0 ? "Enter a quantity first" : remaining === 0 ? "✓ All placed" : `${remaining} left to place`}</div></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{formLocs.map(l => { const n = locQty[l.id] || 0; const canAdd = totalQty > 0 && remaining > 0; return (
@@ -1104,7 +1195,7 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
                   <button onClick={() => dropLoc(l.id)} disabled={!n} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: "#fff", fontSize: 19, fontWeight: 700, cursor: n ? "pointer" : "default", opacity: n ? 1 : .35 }}>−</button>
                   <div style={{ minWidth: 26, textAlign: "center", fontSize: 17, fontWeight: 700, color: n ? teamCol(l.team).fg : T_FAINT }}>{n}</div>
                   <button onClick={() => bumpLoc(l.id)} disabled={!canAdd} style={{ width: 34, height: 34, borderRadius: 9, border: "1px solid #cbd5e1", background: canAdd ? "#1e3a8a" : "#fff", color: canAdd ? "#fff" : T_FAINT, fontSize: 19, fontWeight: 700, cursor: canAdd ? "pointer" : "default", opacity: canAdd ? 1 : .4 }}>+</button>
-                </div></div>); })}</div></>}</div>
+                </div></div>); })}</div></>}</>}</div>
 
 
       <Btn t="Save Item" on={add} full />
@@ -1136,13 +1227,14 @@ function AddItems({ d, up, user, team, master, say, ph, setPh }) {
     {sel.length > 0 && !Object.keys(grp).length && <Empty t="No items match your filters" />}
     {Object.entries(grp).map(([id, its]) => { const l = locById(d, id); const c = teamCol(l?.team); return (<div key={id} style={{ marginBottom: 17 }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: "#1f2937", marginBottom: 7, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>📍 {l?.name} <span style={{ color: T_FAINT, fontWeight: 400 }}>({its.length})</span>{master && <TeamTag t={l?.team} sm />}</div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{its.map(i => { const a = alertOf(i.expiry); const co = catOf(i.cat, cats); const here = (i.locs || []).find(x => x.id === id); const shots = ph[i.pg] || []; return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{its.map(i => { const a = alertOf(i.expiry); const co = catOf(i.cat, cats); const here = (i.locs || []).find(x => x.id === id); return (
         <Card key={i.id + id} s={{ padding: "10px 13px", borderLeft: `3px solid ${a ? a.br : c.dot}` }}>
           <div style={{ display: "flex", justifyContent: "space-between" }}><div style={{ flex: 1 }}>
             <div style={{ fontWeight: 600, fontSize: 13.5 }}>{i.name} {i.dose && <span style={{ color: T_MUTED, fontWeight: 500 }}>{i.dose}</span>}</div>
-            <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={`Qty here: ${here?.qty ?? i.qty}`} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}{shots.length > 0 && <Tag t={`📷 ${shots.length}`} bg="#dcfce7" fg="#166534" />}</div>
+            <div style={{ display: "flex", gap: 5, marginTop: 4, flexWrap: "wrap" }}><Tag t={co.label} bg={co.col} fg={co.fg} /><Tag t={`Exp: ${fmtD(i.expiry)}`} /><Tag t={i.unit ? `${i.remaining ?? i.qty} of ${i.qty} ${i.unit}` : `Qty here: ${here?.qty ?? i.qty}`} bg={i.unit ? "#dcfce7" : "#e5e7eb"} fg={i.unit ? "#166534" : "#1f2937"} />{i.batch && <Tag t={`Batch: ${i.batch}`} />}</div>
+            {i.unit && <div style={{ fontSize: 12, color: T_MUTED, marginTop: 4 }}>{medLine(i)}</div>}
             {(i.locs || []).length > 1 && <div style={{ fontSize: 11, color: T_FAINT, marginTop: 3 }}>Also at: {i.locs.filter(x => x.id !== id).map(x => `${locNm(d, x.id)} (${x.qty})`).join(", ")}</div>}
-            {shots.length > 0 && <div style={{ display: "flex", gap: 5, marginTop: 7, overflowX: "auto" }}>{shots.slice(0, 6).map(sh => <img key={sh.id} src={sh.data} alt="" style={{ width: 46, height: 46, objectFit: "cover", borderRadius: 7, border: "1px solid #e2e8f0", flexShrink: 0 }} />)}</div>}</div>
+</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5 }}>{a && <Tag t={`⚠ ${a.label}`} bg={a.bg} fg={a.fg} />}
               <div style={{ display: "flex", gap: 5 }}><button onClick={() => { setXf(i); setXt(""); setXc(""); }} style={{ background: "#eff6ff", border: "none", borderRadius: 7, padding: "4px 9px", cursor: "pointer", color: "#1e3a8a", fontWeight: 700 }}>→</button><button onClick={() => del(i)} style={{ background: "#fee2e2", border: "none", borderRadius: 7, padding: "4px 8px", cursor: "pointer" }}>🗑</button></div></div></div></Card>); })}</div>
     </div>); })}
@@ -1225,6 +1317,103 @@ function Hist({ d, team, master }) {
   </div>);
 }
 
+/* Overview — every location with its stock, drag items between them, and
+   anything unassigned pushed to the top. */
+function Overview({ d, up, user, team, master, say, logIt }) {
+  const [openLoc, setOpenLoc] = useState(null);
+  const [drag, setDrag] = useState(null);        // { item, fromId, x, y, over }
+  const [manage, setManage] = useState(false);
+  const dragRef = useRef(null);
+
+  const locs = (d.invLocs || []).filter(l => master || l.team === team);
+  const items = d.items.filter(i => master || i.team === team);
+  const at = id => items.filter(i => (i.locs || []).some(x => x.id === id));
+  const units = id => at(id).reduce((n, i) => n + ((i.locs || []).find(x => x.id === id)?.qty || 0), 0);
+  const loose = items.filter(i => !(i.locs || []).length);
+
+  /* Pointer drag — works with a finger or a mouse. Only the grip starts it, so
+     the list still scrolls normally. */
+  const start = (e, item, fromId) => {
+    e.preventDefault();
+    dragRef.current = { item, fromId };
+    setDrag({ item, fromId, x: e.clientX, y: e.clientY, over: null });
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const moveTo = e => {
+    if (!dragRef.current) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const tgt = el?.closest?.("[data-loc]")?.getAttribute("data-loc") || null;
+    setDrag(p => p && ({ ...p, x: e.clientX, y: e.clientY, over: tgt }));
+  };
+  const drop = () => {
+    const cur = drag;
+    dragRef.current = null; setDrag(null);
+    if (!cur?.over || cur.over === cur.fromId) return;
+    const dest = locById(d, cur.over); if (!dest) return;
+    const i = cur.item;
+    const qty = cur.fromId ? ((i.locs || []).find(x => x.id === cur.fromId)?.qty || i.qty) : (i.unit ? (i.remaining ?? i.qty) : i.qty);
+    up(x => ({ ...x, items: x.items.map(y => y.id !== i.id ? y : {
+      ...y, team: dest.team,
+      locs: [...(y.locs || []).filter(l => l.id !== cur.fromId), { id: dest.id, qty }],
+    }) }));
+    logIt("MOVE_ITEM", `${i.name} → ${dest.name}${cur.fromId ? ` (from ${locNm(d, cur.fromId)})` : " (was unassigned)"}`, dest.team);
+    say(`${i.name} → ${dest.name}`);
+  };
+
+  const Grip = ({ item, fromId }) => (
+    <div onPointerDown={e => start(e, item, fromId)} onPointerMove={moveTo} onPointerUp={drop} onPointerCancel={drop}
+      style={{ touchAction: "none", cursor: "grab", padding: "6px 9px", color: "#94a3b8", fontSize: 17, lineHeight: 1, userSelect: "none", flexShrink: 0 }}>⠿</div>
+  );
+  const Row = ({ i, fromId }) => { const a = alertOf(i.expiry); const q = fromId ? (i.locs || []).find(x => x.id === fromId)?.qty : null; return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 10, padding: "7px 4px 7px 8px", opacity: drag?.item?.id === i.id ? .4 : 1 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{i.name} {i.dose && <span style={{ color: T_MUTED, fontWeight: 500 }}>{i.dose}</span>}</div>
+        <div style={{ fontSize: 11.5, color: T_MUTED, marginTop: 2 }}>{i.unit ? `${i.remaining ?? i.qty} of ${i.qty} ${i.unit}` : `${q ?? i.qty}`}{i.expiry ? ` · ${fmtD(i.expiry)}` : ""}{a ? ` · ${a.label}` : ""}</div>
+      </div>
+      <Grip item={i} fromId={fromId} />
+    </div>); };
+
+  return (<div><H1 t={master ? "All Teams — Overview" : "Overview"} />
+
+    {loose.length > 0 && <Card s={{ marginBottom: 14, borderLeft: "4px solid #dc2626", background: "#fef2f2" }}>
+      <div style={{ fontWeight: 800, color: "#991b1b", fontSize: 15, marginBottom: 3 }}>⚠ {loose.length} item{loose.length !== 1 ? "s" : ""} not in a location</div>
+      <div style={{ fontSize: 12.5, color: "#7f1d1d", marginBottom: 10 }}>Drag each onto a location below. Unassigned stock never appears in an audit.</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{loose.map(i => <Row key={i.id} i={i} fromId={null} />)}</div>
+    </Card>}
+
+    {!locs.length ? <Empty t={`No locations yet — add one below`} /> :
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{(master ? TEAMS : [team]).map(t => {
+        const ls = locs.filter(l => l.team === t); if (!ls.length) return null;
+        return (<div key={t}>
+          {master && <div style={{ marginBottom: 7 }}><TeamTag t={t} /></div>}
+          <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>{ls.map(l => {
+            const list = at(l.id); const isOpen = openLoc === l.id; const hot = drag?.over === l.id; const c = teamCol(l.team);
+            return (<div key={l.id} data-loc={l.id}
+              style={{ border: `2px solid ${hot ? "#16a34a" : "#e2e8f0"}`, background: hot ? "#f0fdf4" : "#fff", borderRadius: 14, overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,.06)", transition: "border-color .12s" }}>
+              <button onClick={() => setOpenLoc(isOpen ? null : l.id)} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", gap: 10, padding: "14px 16px", background: "none", border: "none", cursor: "pointer", textAlign: "left", borderLeft: `4px solid ${c.dot}` }}>
+                <div><div style={{ fontSize: 16.5, fontWeight: 700, color: "#0f172a" }}>{l.name}</div>
+                  <div style={{ fontSize: 12.5, color: T_MUTED, marginTop: 2 }}>{list.length} item{list.length !== 1 ? "s" : ""} · {units(l.id)} unit{units(l.id) !== 1 ? "s" : ""}</div></div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {list.some(i => alertOf(i.expiry)) && <Tag t="⚠" bg="#fef3c7" fg="#92400e" />}
+                  <span style={{ fontSize: 13, color: T_FAINT }}>{isOpen ? "▲" : "▼"}</span></div>
+              </button>
+              {hot && <div style={{ padding: "9px 16px", background: "#dcfce7", color: "#166534", fontSize: 13, fontWeight: 700 }}>Drop here</div>}
+              {isOpen && <div style={{ padding: "0 12px 12px" }}>
+                {!list.length ? <div style={{ fontSize: 13, color: T_MUTED, padding: "4px 4px 8px" }}>Empty</div>
+                  : <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>{list.map(i => <Row key={i.id} i={i} fromId={l.id} />)}</div>}
+              </div>}
+            </div>); })}</div>
+        </div>); })}</div>}
+
+    <div style={{ marginTop: 18 }}>
+      <button onClick={() => setManage(!manage)} style={{ background: "none", border: "none", color: "#1e3a8a", fontSize: 14, fontWeight: 700, cursor: "pointer", padding: 0 }}>{manage ? "▲ Hide settings" : "▼ Locations & sections"}</button>
+      {manage && <div style={{ marginTop: 12 }}><Locs d={d} up={up} team={team} master={master} say={say} /><div style={{ marginTop: 24 }}><Sections d={d} up={up} say={say} /></div></div>}
+    </div>
+
+    {drag && <div style={{ position: "fixed", left: drag.x, top: drag.y, transform: "translate(-50%,-140%)", pointerEvents: "none", zIndex: 999, background: "#1e3a8a", color: "#fff", padding: "9px 14px", borderRadius: 10, fontSize: 13.5, fontWeight: 700, boxShadow: "0 8px 24px rgba(0,0,0,.25)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{drag.item.name}</div>}
+  </div>);
+}
+
 /* Setup — storage locations, owned by a team */
 function Locs({ d, up, team, master, say }) {
   const [n, setN] = useState(""); const [nt, setNt] = useState(master ? "" : team);
@@ -1240,10 +1429,9 @@ function Locs({ d, up, team, master, say }) {
     setN(""); say(`Added to ${teamShort(nt)}`);
   };
   const sv = id => { if (!ev.trim()) return say("Cannot be empty", "error"); up(x => ({ ...x, invLocs: x.invLocs.map(l => l.id === id ? { ...l, name: ev.trim() } : l) })); setEd(null); say("Updated"); };
-  const rm = id => { up(x => ({ ...x, invLocs: x.invLocs.filter(l => l.id !== id), items: x.items.map(i => ({ ...i, locs: (i.locs || []).filter(l => l.id !== id) })).filter(i => (i.locs || []).length) })); setCf(null); say("Removed"); };
+  const rm = id => { up(x => ({ ...x, invLocs: x.invLocs.filter(l => l.id !== id), items: x.items.map(i => ({ ...i, locs: (i.locs || []).filter(l => l.id !== id) })) })); setCf(null); say("Removed — its stock is now unassigned"); };
 
-  return (<div><H1 t="Setup" />
-    <H2 t="Storage Locations" />
+  return (<div><H2 t="Storage Locations" />
     <Card s={{ marginBottom: 13 }}>
       {master && <div style={{ marginBottom: 10 }}><label style={LB}>Team</label>
         <select value={nt} onChange={e => setNt(e.target.value)} style={{ ...IN, background: nt ? teamCol(nt).bg : "#fff", color: nt ? teamCol(nt).fg : "#000", fontWeight: 700 }}>
@@ -1323,7 +1511,7 @@ function TeamMgmt({ d, up, user, say, rec }) {
   </div>);
 }
 
-function Branding({ d, up, user, say, ph, setPh }) {
+function Branding({ d, up, user, say }) {
   const fr = useRef(); const [name, setName] = useState(d.clubName);
   if (user.role !== "super_admin") return <Empty t="Super Admin access required" />;
   const medOn = !!d.modules?.med;
@@ -1344,9 +1532,7 @@ function Branding({ d, up, user, say, ph, setPh }) {
         <button onClick={() => { up(y => ({ ...y, logo: "mark" })); say("Default mark set"); }} title="Sports Stock mark"
           style={{ width: 42, height: 42, borderRadius: 11, border: `2px solid ${d.logo === "mark" || d.logo === "⚽" ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === "mark" || d.logo === "⚽" ? "#eff6ff" : "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: "#1e3a8a" }}><Mark size={24} /></button>
         {["🦅", "🏥", "💊", "🩺", "🏉", "🏀", "⚕️"].map(x => <button key={x} onClick={() => { up(y => ({ ...y, logo: x })); say("Icon set"); }} style={{ width: 42, height: 42, fontSize: 21, borderRadius: 11, border: `2px solid ${d.logo === x ? "#1e3a8a" : "#e5e7eb"}`, background: d.logo === x ? "#eff6ff" : "#fff", cursor: "pointer" }}>{x}</button>)}</div></Card>
-    <Card s={{ marginBottom: 13 }}><H2 t="Club Name" /><div style={{ display: "flex", gap: 8 }}><input value={name} onChange={e => setName(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="Crystal Palace FC" /><Btn t="Save" on={() => { up(x => ({ ...x, clubName: name })); say("Club name updated"); }} sm /></div></Card>
-    <Card><H2 t="Item Photos" /><p style={{ fontSize: 13, color: T_MUTED, margin: "0 0 11px" }}>{photoCount} photo{photoCount !== 1 ? "s" : ""} stored on this device. Photos are the largest thing the app keeps — clear them if storage fills up. Item records are not affected.</p>
-      <Btn t="Delete all item photos" on={() => { if (!photoCount) return say("No photos stored", "warn"); setPh({}); say("All item photos deleted"); }} bg="#fee2e2" fg="#991b1b" sm /></Card>
+    <Card><H2 t="Club Name" /><div style={{ display: "flex", gap: 8 }}><input value={name} onChange={e => setName(e.target.value)} style={{ ...IN, flex: 1 }} placeholder="Crystal Palace FC" /><Btn t="Save" on={() => { up(x => ({ ...x, clubName: name })); say("Club name updated"); }} sm /></div></Card>
   </div>);
 }
 
@@ -1354,7 +1540,7 @@ const dl = (rows, filename) => { const a = document.createElement("a"); a.href =
 
 function Backup({ d, up, user, say }) {
   const cats = catsOf(d);
-  const sync = d.sync || { url: "", enabled: false, lastAt: null, lastCount: 0 };
+  const sync = d.sync || { url: "", enabled: false, auto: true, lastAt: null, lastCount: 0, lastError: "" };
   const [url, setUrl] = useState(sync.url); const [testing, setTesting] = useState(false);
   const [pushing, setPushing] = useState(false); const [guide, setGuide] = useState(false);
   const isAdmin = user.role === "super_admin";
@@ -1374,18 +1560,18 @@ function Backup({ d, up, user, say }) {
     if (!sync.enabled) return say("Connect SharePoint first", "error");
     if (!d.ledger.length) return say("Nothing to sync yet", "warn");
     setPushing(true);
-    try { await post(d.ledger.map(l => ({ ts: l.ts, user: l.user, role: l.role, team: l.team, action: l.action, detail: l.detail })), "ledger"); setSync({ lastAt: nowISO(), lastCount: d.ledger.length }); say(`${d.ledger.length} ledger rows sent`); }
+    try { await post(ledgerRows(d), "ledger"); setSync({ lastAt: nowISO(), lastCount: d.ledger.length, lastError: "" }); say(`${d.ledger.length} ledger rows sent`); }
     catch { say("Sync failed", "error"); } finally { setPushing(false); }
   };
   const pushSnapshot = async () => {
     if (!sync.enabled) return say("Connect SharePoint first", "error");
     setPushing(true);
-    const rows = [...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, expiry: m.expiry, batch: "", team: m.team })), ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: (i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join("; "), qty: i.qty, expiry: i.expiry, batch: i.batch || "", team: i.team || "-" }))];
+    const rows = snapshotRows(d);
     try { await post(rows, "snapshot"); setSync({ lastAt: nowISO() }); say(`${rows.length} stock rows sent`); }
     catch { say("Sync failed", "error"); } finally { setPushing(false); }
   };
   const csv = () => { const rows = [["Timestamp", "User", "Role", "Team", "Action", "Detail"]]; d.ledger.forEach(l => rows.push([l.ts, l.user, l.role, l.team, l.action, `"${(l.detail || "").replace(/"/g, "'")}"`])); dl(rows, `Ledger-${new Date().toISOString().split("T")[0]}.csv`); say("Ledger exported"); };
-  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Expiry", "Batch", "Team"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, m.expiry, "", m.team || ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ")}"`, i.qty, i.expiry, i.batch || "", i.team || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
+  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Unit", "Remaining", "Expiry", "Batch", "Team"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, "", "", m.expiry, "", m.team || ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ") || "UNASSIGNED"}"`, i.qty, i.unit || "", i.remaining == null ? "" : i.remaining, i.expiry, i.batch || "", i.team || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
   const unsynced = d.ledger.length - (sync.lastCount || 0);
   const recent = [...d.ledger].reverse().slice(0, 15);
 
@@ -1396,14 +1582,20 @@ function Backup({ d, up, user, say }) {
                 <label style={LB}>Power Automate HTTP URL</label>
         <input value={url} onChange={e => setUrl(e.target.value)} style={{ ...IN, fontSize: 13, fontFamily: "monospace" }} placeholder="https://prod-00.uksouth.logic.azure.com/workflows/..." />
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}><Btn t={testing ? "⏳ Testing…" : "🔗 Test & Connect"} on={test} dis={testing} sm />{sync.enabled && <Btn t="Disconnect" on={() => { setSync({ enabled: false }); say("Disconnected"); }} bg="#f3f4f6" fg="#374151" sm />}</div>
-        {sync.enabled && <><div style={{ marginTop: 13, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "11px 13px" }}>
-          <div style={{ fontSize: 12, color: "#166534", fontWeight: 600 }}>Last sync: {sync.lastAt ? fmtDT(sync.lastAt) : "never"}</div>
-          {unsynced > 0 && <div style={{ fontSize: 12, color: "#92400e", marginTop: 3 }}>⚠ {unsynced} new entr{unsynced === 1 ? "y" : "ies"} not yet synced</div>}</div>
+        {sync.enabled && <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 13, border: `1.5px solid ${sync.auto ? "#86efac" : "#cbd5e1"}`, background: sync.auto ? "#f0fdf4" : "#f8fafc", borderRadius: 11, padding: "12px 14px" }}>
+            <div><div style={{ fontSize: 15, fontWeight: 700, color: sync.auto ? "#166534" : "#334155" }}>Automatic sync</div>
+              <div style={{ fontSize: 12.5, color: sync.auto ? "#166534" : T_MUTED, marginTop: 2 }}>{sync.auto ? "Sends 20 seconds after any change" : "Off — use the buttons below"}</div></div>
+            <Btn t={sync.auto ? "On" : "Off"} on={() => setSync({ auto: !sync.auto })} bg={sync.auto ? "#16a34a" : "#94a3b8"} sm /></div>
+          <div style={{ marginTop: 11, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px" }}>
+            <div style={{ fontSize: 12.5, color: "#334155", fontWeight: 600 }}>Last sync: {sync.lastAt ? fmtDT(sync.lastAt) : "never"}</div>
+            {unsynced > 0 && <div style={{ fontSize: 12, color: "#92400e", marginTop: 3 }}>⚠ {unsynced} new entr{unsynced === 1 ? "y" : "ies"} not yet sent</div>}
+            {sync.lastError && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3, fontWeight: 600 }}>Last attempt failed: {sync.lastError}</div>}</div>
           <div style={{ display: "flex", gap: 8, marginTop: 11, flexWrap: "wrap" }}><Btn t={pushing ? "⏳ Sending…" : "⬆ Sync Ledger"} on={pushLedger} dis={pushing} bg="#16a34a" sm /><Btn t="⬆ Sync Stock Snapshot" on={pushSnapshot} dis={pushing} bg="#0369a1" sm /></div></>}
         <button onClick={() => setGuide(!guide)} style={{ background: "none", border: "none", color: "#1e3a8a", fontSize: 12.5, fontWeight: 600, cursor: "pointer", marginTop: 12, padding: 0 }}>{guide ? "▲ Hide setup instructions" : "▼ How do I set this up? (send to IT)"}</button>
         {guide && <div style={{ marginTop: 11, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 11, padding: "14px 16px", fontSize: 12.5, color: "#374151", lineHeight: 1.6 }}>
           <div style={{ fontWeight: 700, marginBottom: 9, fontSize: 13 }}>Setup — approx. 15 minutes</div>
-          {[["1", "Create the Excel file", "In SharePoint create SportsStock-Backup.xlsx with two sheets: Ledger and Snapshot. Ledger headers: Timestamp, User, Role, Team, Action, Detail. Snapshot headers: Type, Name, Dose, Section, Locations, Qty, Expiry, Batch. Format each as a Table named LedgerTable and SnapshotTable."],
+          {[["1", "Create the Excel file", "In SharePoint create SportsStock-Backup.xlsx with two sheets: Ledger and Snapshot. Ledger headers: Timestamp, User, Role, Team, Action, Detail. Snapshot headers: Type, Name, Dose, Section, Locations, Qty, Unit, Remaining, Expiry, Batch, Team. Format each as a Table named LedgerTable and SnapshotTable."],
           ["2", "Create the flow", "make.powerautomate.com → Create → Instant cloud flow → trigger 'When an HTTP request is received'."],
           ["3", "Set the request schema", "Paste the sample JSON below into 'Use sample payload to generate schema'."],
           ["4", "Add the Excel action", "Add 'Apply to each' over rows, and inside it 'Add a row into a table' (Excel Online Business). Point at the workbook and LedgerTable, then map each field."],
