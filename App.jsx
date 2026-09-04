@@ -258,7 +258,7 @@ const migrate = x => {
   };
 };
 
-const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, lastAt: null, lastCount: 0 } };
+const BLANK = { users: [], pending: [], meds: [], recs: [], reqs: [], audit: [], items: [], checks: [], orders: [], medLocs: [...MED_LOCS], invLocs: [...INV_LOCS], cats: DEFAULT_CATS, modules: { med: false }, cfg: {}, ledger: [], logo: "mark", clubName: "Crystal Palace FC", sync: { url: "", enabled: false, auto: true, lastAt: null, lastCount: 0, lastError: "" } };
 
 /* ── PHOTO BLOCK ──────────────────────────────────────────── */
 /* Used when adding an item and again during audit. One or more photos per
@@ -287,6 +287,23 @@ function PhotoBlock({ shots, onAdd, onDel, busy }) {
     </div>
   );
 }
+
+/* ── SHAREPOINT SYNC ──────────────────────────────────────── */
+const ledgerRows = d => d.ledger.map(l => ({ ts: l.ts, user: l.user, role: l.role, team: l.team, action: l.action, detail: l.detail }));
+const snapshotRows = d => {
+  const cats = catsOf(d);
+  return [
+    ...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, unit: "", remaining: "", expiry: m.expiry, batch: "", team: m.team || "" })),
+    ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: (i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join("; ") || "UNASSIGNED", qty: i.qty, unit: i.unit || "", remaining: i.remaining == null ? "" : i.remaining, expiry: i.expiry, batch: i.batch || "", team: i.team || "" })),
+  ];
+};
+const postSync = async (url, body) => {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return true;
+};
+/* Cheap change-detector so auto-sync only fires when the stock actually moved */
+const sigOf = d => { const t = JSON.stringify({ i: d.items, m: d.meds, l: d.invLocs, c: d.checks, o: d.orders, g: d.ledger.length }); let h = 0; for (let k = 0; k < t.length; k++) h = (h * 31 + t.charCodeAt(k)) | 0; return String(h); };
 
 /* ── ROOT ─────────────────────────────────────────────────── */
 export default function App() {
@@ -318,6 +335,34 @@ export default function App() {
   useEffect(() => {
     try { user ? localStorage.setItem(STORE_KEY + "_session", JSON.stringify(user)) : localStorage.removeItem(STORE_KEY + "_session"); } catch {}
   }, [user]);
+
+  /* Automatic SharePoint sync. Waits for changes to settle, then sends the
+     ledger and a fresh snapshot. Never fires on first load, and the sync's own
+     bookkeeping is excluded from the signature so it can't loop. */
+  const syncRef = useRef({ sig: null, timer: null, busy: false });
+  useEffect(() => {
+    const cfg = d.sync || {};
+    const sig = sigOf(d);
+    if (syncRef.current.sig === null) { syncRef.current.sig = sig; return; }
+    if (sig === syncRef.current.sig) return;
+    syncRef.current.sig = sig;
+    if (!cfg.enabled || !cfg.auto || !cfg.url) return;
+    clearTimeout(syncRef.current.timer);
+    syncRef.current.timer = setTimeout(async () => {
+      if (syncRef.current.busy) return;
+      syncRef.current.busy = true;
+      try {
+        const base = { source: "SportsStockApp", club: d.clubName, sentAt: nowISO(), sentBy: user?.name || "auto" };
+        const lr = ledgerRows(d);
+        if (lr.length) await postSync(cfg.url, { ...base, type: "ledger", rowCount: lr.length, rows: lr });
+        const sr = snapshotRows(d);
+        await postSync(cfg.url, { ...base, type: "snapshot", rowCount: sr.length, rows: sr });
+        setD(x => ({ ...x, sync: { ...(x.sync || {}), lastAt: nowISO(), lastCount: x.ledger.length, lastError: "" } }));
+      } catch (e) {
+        setD(x => ({ ...x, sync: { ...(x.sync || {}), lastError: String(e.message || e) } }));
+      } finally { syncRef.current.busy = false; }
+    }, 20000);
+  }, [d, user]);
 
   const say = (m, t = "ok") => { setMsg({ m, t }); setTimeout(() => setMsg(null), 4000); };
   const up = fn => setD(p => fn(p));
@@ -872,7 +917,7 @@ function AuditShot({ onPick, label, wide }) {
   </>);
 }
 
-function AddItems({ d, up, user, team, master, say }) {
+function AddItems({ d, up, user, team, master, say, logIt }) {
   const cats = catsOf(d);
   const [sel, setSel] = useState([]); const [filt, setFilt] = useState("All"); const [show, setShow] = useState(false);
   const [tgt, setTgt] = useState(master ? "" : team);   // Master must choose; otherwise the team you're viewing
@@ -1024,9 +1069,10 @@ function AddItems({ d, up, user, team, master, say }) {
     if (!expValid(expiry)) return say("Enter expiry as MM/YYYY or DD/MM/YYYY", "error");
     up(x => ({ ...x, items: [...x.items, { id: uid(), team: tgt, name: name.trim(), dose, cat, expiry, batch, qty: totalQty, unit: isMed ? unit : "", remaining: isMed ? remQty : null, locs, added: nowISO(), checked: nowISO() }] }));
     const a = alertOf(expiry); if (a) up(x => ({ ...x, orders: [...x.orders, { id: uid(), team: tgt, name: `${name} ${dose || ""}`.trim(), loc: locTxt, expiry, lvl: a.label, done: false }] }));
+    logIt("ADD_ITEM", `${name.trim()}${dose ? " " + dose : ""} × ${totalQty}${unit ? " " + unit : ""} → ${locTxt}`, tgt);
     say(`Added to ${locs.length} location${locs.length !== 1 ? "s" : ""}`); reset();
   };
-  const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); say("Removed"); };
+  const del = i => { up(x => ({ ...x, items: x.items.filter(y => y.id !== i.id) })); logIt("DEL_ITEM", `${i.name} removed`, i.team || team); say("Removed"); };
   const move = () => {
     if (!xt && !xc) return say("Choose a location or a section to move to", "error");
     const nextCat = xc === "_none" ? "" : xc;
@@ -1494,7 +1540,7 @@ const dl = (rows, filename) => { const a = document.createElement("a"); a.href =
 
 function Backup({ d, up, user, say }) {
   const cats = catsOf(d);
-  const sync = d.sync || { url: "", enabled: false, lastAt: null, lastCount: 0 };
+  const sync = d.sync || { url: "", enabled: false, auto: true, lastAt: null, lastCount: 0, lastError: "" };
   const [url, setUrl] = useState(sync.url); const [testing, setTesting] = useState(false);
   const [pushing, setPushing] = useState(false); const [guide, setGuide] = useState(false);
   const isAdmin = user.role === "super_admin";
@@ -1514,18 +1560,18 @@ function Backup({ d, up, user, say }) {
     if (!sync.enabled) return say("Connect SharePoint first", "error");
     if (!d.ledger.length) return say("Nothing to sync yet", "warn");
     setPushing(true);
-    try { await post(d.ledger.map(l => ({ ts: l.ts, user: l.user, role: l.role, team: l.team, action: l.action, detail: l.detail })), "ledger"); setSync({ lastAt: nowISO(), lastCount: d.ledger.length }); say(`${d.ledger.length} ledger rows sent`); }
+    try { await post(ledgerRows(d), "ledger"); setSync({ lastAt: nowISO(), lastCount: d.ledger.length, lastError: "" }); say(`${d.ledger.length} ledger rows sent`); }
     catch { say("Sync failed", "error"); } finally { setPushing(false); }
   };
   const pushSnapshot = async () => {
     if (!sync.enabled) return say("Connect SharePoint first", "error");
     setPushing(true);
-    const rows = [...d.meds.map(m => ({ type: "Medication", name: m.name, dose: m.dose || "", category: "Medications", locations: m.loc, qty: m.qty, expiry: m.expiry, batch: "", team: m.team })), ...d.items.map(i => ({ type: "Inventory", name: i.name, dose: i.dose || "", category: catOf(i.cat, cats).label, locations: (i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join("; "), qty: i.qty, expiry: i.expiry, batch: i.batch || "", team: i.team || "-" }))];
+    const rows = snapshotRows(d);
     try { await post(rows, "snapshot"); setSync({ lastAt: nowISO() }); say(`${rows.length} stock rows sent`); }
     catch { say("Sync failed", "error"); } finally { setPushing(false); }
   };
   const csv = () => { const rows = [["Timestamp", "User", "Role", "Team", "Action", "Detail"]]; d.ledger.forEach(l => rows.push([l.ts, l.user, l.role, l.team, l.action, `"${(l.detail || "").replace(/"/g, "'")}"`])); dl(rows, `Ledger-${new Date().toISOString().split("T")[0]}.csv`); say("Ledger exported"); };
-  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Expiry", "Batch", "Team"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, m.expiry, "", m.team || ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ")}"`, i.qty, i.expiry, i.batch || "", i.team || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
+  const snap = () => { const rows = [["Type", "Name", "Dose", "Section", "Locations", "Qty", "Unit", "Remaining", "Expiry", "Batch", "Team"]]; d.meds.forEach(m => rows.push(["Medication", m.name, m.dose || "", "Medications", m.loc, m.qty, "", "", m.expiry, "", m.team || ""])); d.items.forEach(i => rows.push(["Inventory", i.name, i.dose || "", catOf(i.cat, cats).label, `"${(i.locs || []).map(l => `${locNm(d, l.id)} (${l.qty})`).join(", ") || "UNASSIGNED"}"`, i.qty, i.unit || "", i.remaining == null ? "" : i.remaining, i.expiry, i.batch || "", i.team || ""])); dl(rows, `Snapshot-${new Date().toISOString().split("T")[0]}.csv`); say("Snapshot exported"); };
   const unsynced = d.ledger.length - (sync.lastCount || 0);
   const recent = [...d.ledger].reverse().slice(0, 15);
 
@@ -1536,14 +1582,20 @@ function Backup({ d, up, user, say }) {
                 <label style={LB}>Power Automate HTTP URL</label>
         <input value={url} onChange={e => setUrl(e.target.value)} style={{ ...IN, fontSize: 13, fontFamily: "monospace" }} placeholder="https://prod-00.uksouth.logic.azure.com/workflows/..." />
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}><Btn t={testing ? "⏳ Testing…" : "🔗 Test & Connect"} on={test} dis={testing} sm />{sync.enabled && <Btn t="Disconnect" on={() => { setSync({ enabled: false }); say("Disconnected"); }} bg="#f3f4f6" fg="#374151" sm />}</div>
-        {sync.enabled && <><div style={{ marginTop: 13, background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 10, padding: "11px 13px" }}>
-          <div style={{ fontSize: 12, color: "#166534", fontWeight: 600 }}>Last sync: {sync.lastAt ? fmtDT(sync.lastAt) : "never"}</div>
-          {unsynced > 0 && <div style={{ fontSize: 12, color: "#92400e", marginTop: 3 }}>⚠ {unsynced} new entr{unsynced === 1 ? "y" : "ies"} not yet synced</div>}</div>
+        {sync.enabled && <>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginTop: 13, border: `1.5px solid ${sync.auto ? "#86efac" : "#cbd5e1"}`, background: sync.auto ? "#f0fdf4" : "#f8fafc", borderRadius: 11, padding: "12px 14px" }}>
+            <div><div style={{ fontSize: 15, fontWeight: 700, color: sync.auto ? "#166534" : "#334155" }}>Automatic sync</div>
+              <div style={{ fontSize: 12.5, color: sync.auto ? "#166534" : T_MUTED, marginTop: 2 }}>{sync.auto ? "Sends 20 seconds after any change" : "Off — use the buttons below"}</div></div>
+            <Btn t={sync.auto ? "On" : "Off"} on={() => setSync({ auto: !sync.auto })} bg={sync.auto ? "#16a34a" : "#94a3b8"} sm /></div>
+          <div style={{ marginTop: 11, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 10, padding: "11px 13px" }}>
+            <div style={{ fontSize: 12.5, color: "#334155", fontWeight: 600 }}>Last sync: {sync.lastAt ? fmtDT(sync.lastAt) : "never"}</div>
+            {unsynced > 0 && <div style={{ fontSize: 12, color: "#92400e", marginTop: 3 }}>⚠ {unsynced} new entr{unsynced === 1 ? "y" : "ies"} not yet sent</div>}
+            {sync.lastError && <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 3, fontWeight: 600 }}>Last attempt failed: {sync.lastError}</div>}</div>
           <div style={{ display: "flex", gap: 8, marginTop: 11, flexWrap: "wrap" }}><Btn t={pushing ? "⏳ Sending…" : "⬆ Sync Ledger"} on={pushLedger} dis={pushing} bg="#16a34a" sm /><Btn t="⬆ Sync Stock Snapshot" on={pushSnapshot} dis={pushing} bg="#0369a1" sm /></div></>}
         <button onClick={() => setGuide(!guide)} style={{ background: "none", border: "none", color: "#1e3a8a", fontSize: 12.5, fontWeight: 600, cursor: "pointer", marginTop: 12, padding: 0 }}>{guide ? "▲ Hide setup instructions" : "▼ How do I set this up? (send to IT)"}</button>
         {guide && <div style={{ marginTop: 11, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 11, padding: "14px 16px", fontSize: 12.5, color: "#374151", lineHeight: 1.6 }}>
           <div style={{ fontWeight: 700, marginBottom: 9, fontSize: 13 }}>Setup — approx. 15 minutes</div>
-          {[["1", "Create the Excel file", "In SharePoint create SportsStock-Backup.xlsx with two sheets: Ledger and Snapshot. Ledger headers: Timestamp, User, Role, Team, Action, Detail. Snapshot headers: Type, Name, Dose, Section, Locations, Qty, Expiry, Batch. Format each as a Table named LedgerTable and SnapshotTable."],
+          {[["1", "Create the Excel file", "In SharePoint create SportsStock-Backup.xlsx with two sheets: Ledger and Snapshot. Ledger headers: Timestamp, User, Role, Team, Action, Detail. Snapshot headers: Type, Name, Dose, Section, Locations, Qty, Unit, Remaining, Expiry, Batch, Team. Format each as a Table named LedgerTable and SnapshotTable."],
           ["2", "Create the flow", "make.powerautomate.com → Create → Instant cloud flow → trigger 'When an HTTP request is received'."],
           ["3", "Set the request schema", "Paste the sample JSON below into 'Use sample payload to generate schema'."],
           ["4", "Add the Excel action", "Add 'Apply to each' over rows, and inside it 'Add a row into a table' (Excel Online Business). Point at the workbook and LedgerTable, then map each field."],
